@@ -26,6 +26,10 @@ struct ParquetCellEdit
 class ParquetReader
 {
 public:
+    // Pseudo column name for an x-axis synthesized from the "Time" and "clkInUs"
+    // metadata entries (embedded key-value metadata or a .metadata sidecar file).
+    static constexpr const char *kMetadataTimeColumn = "<metadata time [us]>";
+    static bool hasMetadataTime(const std::string &filename);
     static std::vector<std::string> columnNames(const std::string &filename);
     static std::unique_ptr<ParquetData> read(const std::string &filename,
                                              const std::string &x_column,

@@ -13,8 +13,15 @@
 #include <arrow/type.h>
 #include <arrow/util/bit_util.h>
 #include <arrow/util/config.h>
+#include <arrow/util/key_value_metadata.h>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <map>
 #include <stdexcept>
 
@@ -60,6 +67,11 @@ static std::vector<double> get_double_column(const std::shared_ptr<arrow::Table>
         throw std::runtime_error("Column " + name + " not found");
 
     std::vector<double> result;
+    int64_t total = 0;
+    for (int i = 0; i < column->num_chunks(); ++i)
+        total += column->chunk(i)->length();
+    result.reserve(total);
+
     for (int i = 0; i < column->num_chunks(); ++i)
     {
         auto chunk = column->chunk(i);
@@ -137,7 +149,7 @@ static std::vector<double> get_double_column(const std::shared_ptr<arrow::Table>
         }
         else
         {
-            throw std::runtime_error("Column " + name + " has unsupported numeric type");
+            result.resize(total);
         }
     }
     return result;
@@ -150,6 +162,11 @@ static std::vector<int> get_int_column(const std::shared_ptr<arrow::Table> &tabl
         throw std::runtime_error("Column " + name + " not found");
 
     std::vector<int> result;
+    int64_t total = 0;
+    for (int i = 0; i < column->num_chunks(); ++i)
+        total += column->chunk(i)->length();
+    result.reserve(total);
+
     for (int i = 0; i < column->num_chunks(); ++i)
     {
         auto chunk = column->chunk(i);
@@ -234,10 +251,65 @@ static std::vector<int> get_int_column(const std::shared_ptr<arrow::Table> &tabl
         }
         else
         {
-            throw std::runtime_error("Trigger column " + name + " must be numeric or boolean");
+            result.resize(total);
         }
     }
     return result;
+}
+
+struct MetadataTime
+{
+    double start;
+    double delta;
+};
+
+static std::optional<MetadataTime> parse_metadata_time(const QByteArray &json)
+{
+    QJsonParseError error{};
+    const QJsonDocument document = QJsonDocument::fromJson(json, &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject())
+        return std::nullopt;
+    const QJsonObject root = document.object();
+    const QJsonValue clk = root.value("clkInUs");
+    if (!clk.isDouble() || clk.toDouble() <= 0.0)
+        return std::nullopt;
+    double start = 0.0;
+    const QJsonValue timestamp = root.value("timestamp");
+    if (timestamp.isObject() && timestamp.toObject().value("Time").isDouble())
+        start = timestamp.toObject().value("Time").toDouble();
+    else if (root.value("Time").isDouble())
+        start = root.value("Time").toDouble();
+    return MetadataTime{start, clk.toDouble()};
+}
+
+static std::optional<MetadataTime> find_metadata_time(parquet::arrow::FileReader &reader,
+                                                      const std::string &filename)
+{
+    const auto metadata = reader.parquet_reader()->metadata();
+    if (metadata)
+    {
+        if (const auto kv = metadata->key_value_metadata())
+        {
+            for (int64_t i = 0; i < kv->size(); ++i)
+            {
+                const std::string &value = kv->value(i);
+                if (auto result = parse_metadata_time(QByteArray(value.data(), static_cast<qsizetype>(value.size()))))
+                    return result;
+            }
+        }
+    }
+
+    const QFileInfo info(QString::fromStdString(filename));
+    QFile sidecar(info.dir().filePath(info.completeBaseName() + ".metadata"));
+    if (sidecar.open(QIODevice::ReadOnly))
+        return parse_metadata_time(sidecar.readAll());
+    return std::nullopt;
+}
+
+bool ParquetReader::hasMetadataTime(const std::string &filename)
+{
+    auto reader = open_reader(filename);
+    return find_metadata_time(*reader, filename).has_value();
 }
 
 std::vector<std::string> ParquetReader::columnNames(const std::string &filename)
@@ -269,7 +341,20 @@ std::unique_ptr<ParquetData> ParquetReader::read(const std::string &filename,
 
     auto table = read_table(*reader, "Failed to read table: ");
 
-    data->raw_idx = get_double_column(table, x_column);
+    if (x_column == kMetadataTimeColumn)
+    {
+        const auto time = find_metadata_time(*reader, filename);
+        if (!time)
+            throw std::runtime_error("No usable time metadata (Time/clkInUs) found");
+        const int64_t rows = table->num_rows();
+        data->raw_idx.resize(static_cast<size_t>(rows));
+        for (int64_t i = 0; i < rows; ++i)
+            data->raw_idx[static_cast<size_t>(i)] = time->start + static_cast<double>(i) * time->delta;
+    }
+    else
+    {
+        data->raw_idx = get_double_column(table, x_column);
+    }
     data->signal_values.reserve(signal_columns.size());
     for (const std::string &signal_column : signal_columns)
     {

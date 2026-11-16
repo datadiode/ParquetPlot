@@ -723,6 +723,9 @@ void MainWindow::selectColumnsForFile(const QString &filename, bool preserve_vie
 
         QComboBox *x_combo = new QComboBox(&column_dialog);
         x_combo->setObjectName("xColumn");
+        const bool has_metadata_time = ParquetReader::hasMetadataTime(filename.toStdString());
+        if (has_metadata_time)
+            x_combo->addItem(QString::fromUtf8(ParquetReader::kMetadataTimeColumn));
 
         for (const std::string &name : column_names)
         {
@@ -737,7 +740,12 @@ void MainWindow::selectColumnsForFile(const QString &filename, bool preserve_vie
                 combo->setCurrentIndex(index);
         };
 
-        preselect(x_combo, preserve_view ? x_column_name : QString("raw_idx"));
+        if (preserve_view)
+            preselect(x_combo, x_column_name);
+        else if (has_metadata_time)
+            x_combo->setCurrentIndex(0);
+        else
+            preselect(x_combo, QString("raw_idx"));
 
         form->addRow("X axis:", x_combo);
 
