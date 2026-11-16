@@ -39,6 +39,32 @@
 #include <QSpinBox>
 #include <QLineEdit>
 #include <QScrollArea>
+#include <QDateTime>
+#include <QTimeZone>
+#include <cmath>
+
+namespace
+{
+// Formats microseconds since 1970-01-01 UTC as ISO 8601 with fractional seconds.
+class IsoMicrosecondTicker : public QCPAxisTicker
+{
+protected:
+    QString getTickLabel(double tick, const QLocale &, QChar, int) override
+    {
+        const double rounded = std::round(tick);
+        qint64 seconds = static_cast<qint64>(std::floor(rounded / 1e6));
+        qint64 micros = static_cast<qint64>(rounded - static_cast<double>(seconds) * 1e6);
+        if (micros >= 1000000)
+        {
+            ++seconds;
+            micros -= 1000000;
+        }
+        const QDateTime time = QDateTime::fromSecsSinceEpoch(seconds, QTimeZone::UTC);
+        return time.toString("yyyy-MM-ddTHH:mm:ss") +
+               QString(".%1Z").arg(micros, 6, 10, QChar('0'));
+    }
+};
+}
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QStackedWidget>
@@ -1204,6 +1230,10 @@ void MainWindow::setupPanels()
         QCPAxis *x_axis = rect->axis(QCPAxis::atBottom);
         x_axis->setTickLabels(i == panel_settings.size() - 1);
         x_axis->setLabel(i == panel_settings.size() - 1 ? x_column_name : QString());
+        if (x_column_name == QString::fromUtf8(ParquetReader::kMetadataTimeColumn))
+            x_axis->setTicker(QSharedPointer<IsoMicrosecondTicker>::create());
+        else
+            x_axis->setTicker(QSharedPointer<QCPAxisTicker>::create());
         QCPAxis *y_axis = rect->axis(QCPAxis::atLeft);
         y_axis->setLabel(settings.label);
         y_axis->setScaleType(settings.logarithmic ? QCPAxis::stLogarithmic : QCPAxis::stLinear);
