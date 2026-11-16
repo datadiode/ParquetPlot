@@ -30,6 +30,7 @@ class QStackedWidget;
 class QToolBar;
 class QAction;
 class TableBrowser;
+class QTreeWidget;
 
 struct PlotPanelSettings
 {
@@ -118,6 +119,9 @@ private slots:
 
 private:
     QCustomPlot *plot;
+    QTreeWidget *signal_tree = nullptr;
+    void populateSignalTree(const std::vector<std::string> &column_names);
+    void addSignalsToPlot(const QStringList &names, int panel);
     QStackedWidget *view_stack;
     QWidget *plot_page;
     TableBrowser *table_browser;

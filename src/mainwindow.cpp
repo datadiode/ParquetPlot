@@ -39,13 +39,54 @@
 #include <QSpinBox>
 #include <QLineEdit>
 #include <QScrollArea>
+#include <QSplitter>
+#include <QTreeWidget>
+#include <QHeaderView>
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <functional>
 #include <QDateTime>
 #include <QTimeZone>
 #include <cmath>
 
 namespace
 {
-// Formats microseconds since 1970-01-01 UTC as ISO 8601 with fractional seconds.
+const char *const kSignalMimeType = "application/x-parquetplot-signals";
+
+// Tree whose drag payload is the newline-separated list of full column names
+// of all selected leaves (selecting a group selects all signals beneath it).
+class SignalTreeWidget : public QTreeWidget
+{
+public:
+    using QTreeWidget::QTreeWidget;
+
+protected:
+    QMimeData *mimeData(const QList<QTreeWidgetItem *> &items) const override
+    {
+        QStringList names;
+        std::function<void(const QTreeWidgetItem *)> collect = [&](const QTreeWidgetItem *item)
+        {
+            const QString name = item->data(0, Qt::UserRole).toString();
+            if (!name.isEmpty() && !names.contains(name))
+                names.append(name);
+            for (int i = 0; i < item->childCount(); ++i)
+                collect(item->child(i));
+        };
+        for (const QTreeWidgetItem *item : items)
+            collect(item);
+        auto *mime = new QMimeData;
+        mime->setData(kSignalMimeType, names.join('\n').toUtf8());
+        mime->setText(names.join('\n'));
+        return mime;
+    }
+};
+}
+
+namespace
+{
+// Formats microseconds
 class IsoMicrosecondTicker : public QCPAxisTicker
 {
 protected:
@@ -139,7 +180,21 @@ void MainWindow::setupUI()
     view_stack->addWidget(plot_page);
     table_browser = new TableBrowser(central);
     view_stack->addWidget(table_browser);
-    main_layout->addWidget(view_stack);
+    signal_tree = new SignalTreeWidget(central);
+    signal_tree->setObjectName("signalTree");
+    signal_tree->setHeaderLabel("Signals");
+    signal_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    signal_tree->setDragEnabled(true);
+    signal_tree->setDragDropMode(QAbstractItemView::DragOnly);
+    signal_tree->setToolTip("Drag signals or groups onto a plot panel to add them");
+    plot->setAcceptDrops(true);
+    auto *splitter = new QSplitter(Qt::Horizontal, central);
+    splitter->addWidget(signal_tree);
+    splitter->addWidget(view_stack);
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({280, 1100});
+    main_layout->addWidget(splitter);
     connect(table_browser, &TableBrowser::plotRequested, this, [this](const QString &path)
     {
         if (path == current_file_path && current_data)
@@ -1162,6 +1217,7 @@ void MainWindow::selectColumnsForFile(const QString &filename, bool preserve_vie
         setupPlot(current_data, keep_view);
 
         current_file_path = filename;
+        populateSignalTree(column_names);
         filename_label->setText(QString("File: %1").arg(QFileInfo(filename).fileName()));
         select_columns_btn->setEnabled(true);
         showPlot();
@@ -1170,6 +1226,83 @@ void MainWindow::selectColumnsForFile(const QString &filename, bool preserve_vie
     {
         qWarning() << "Error reading file:" << e.what();
         QMessageBox::critical(this, preserve_view ? "Select Columns" : "Open Parquet File", e.what());
+    }
+}
+
+void MainWindow::populateSignalTree(const std::vector<std::string> &column_names)
+{
+    signal_tree->clear();
+    for (const std::string &column : column_names)
+    {
+        const QString name = QString::fromStdString(column);
+        const QStringList parts = name.split('|');
+        QTreeWidgetItem *parent = nullptr;
+        for (int i = 0; i < parts.size(); ++i)
+        {
+            const bool leaf = i == parts.size() - 1;
+            QTreeWidgetItem *found = nullptr;
+            const int count = parent ? parent->childCount() : signal_tree->topLevelItemCount();
+            for (int c = 0; c < count && !leaf; ++c)
+            {
+                QTreeWidgetItem *child = parent ? parent->child(c) : signal_tree->topLevelItem(c);
+                if (child->text(0) == parts[i] && child->data(0, Qt::UserRole).toString().isEmpty())
+                {
+                    found = child;
+                    break;
+                }
+            }
+            if (!found)
+            {
+                found = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(signal_tree);
+                found->setText(0, parts[i]);
+                if (leaf)
+                {
+                    found->setData(0, Qt::UserRole, name);
+                    found->setToolTip(0, name);
+                }
+            }
+            parent = found;
+        }
+    }
+}
+
+void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
+{
+    QStringList new_signals = signal_column_names;
+    QList<PlotSeriesSettings> new_settings = signal_settings;
+    while (new_settings.size() < new_signals.size())
+        new_settings.append(PlotSeriesSettings{});
+    for (const QString &name : names)
+    {
+        if (new_signals.contains(name) || trigger_column_names.contains(name))
+            continue;
+        new_signals.append(name);
+        PlotSeriesSettings settings;
+        settings.panel = panel;
+        new_settings.append(settings);
+    }
+    if (new_signals.size() == signal_column_names.size())
+        return;
+
+    try
+    {
+        std::vector<std::string> signal_names;
+        for (const QString &name : new_signals)
+            signal_names.push_back(name.toStdString());
+        std::vector<std::string> target_names;
+        for (const QString &name : trigger_column_names)
+            target_names.push_back(name.toStdString());
+        std::shared_ptr<ParquetData> data = ParquetReader::read(current_file_path.toStdString(),
+                                                                x_column_name.toStdString(),
+                                                                signal_names, target_names);
+        signal_column_names = new_signals;
+        signal_settings = new_settings;
+        current_data = std::move(data);
+        setupPlot(current_data, true);
+    }
+    catch (const std::exception &e)
+    {
+        QMessageBox::critical(this, "Add Signals", e.what());
     }
 }
 
@@ -1556,6 +1689,30 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             {
                 active_panel = rect;
                 saveZoomState();
+            }
+        }
+        else if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
+        {
+            auto *drag = static_cast<QDropEvent *>(event);
+            if (current_data && drag->mimeData()->hasFormat(kSignalMimeType))
+            {
+                drag->acceptProposedAction();
+                return true;
+            }
+        }
+        else if (event->type() == QEvent::Drop)
+        {
+            auto *drop = static_cast<QDropEvent *>(event);
+            if (current_data && drop->mimeData()->hasFormat(kSignalMimeType))
+            {
+                const QStringList names = QString::fromUtf8(drop->mimeData()->data(kSignalMimeType))
+                                              .split('\n', Qt::SkipEmptyParts);
+                int panel = panel_rects.size() - 1;
+                if (QCPAxisRect *rect = panelAt(drop->position().toPoint()))
+                    panel = panel_rects.indexOf(rect);
+                drop->acceptProposedAction();
+                addSignalsToPlot(names, std::max(panel, 0));
+                return true;
             }
         }
         else if (event->type() == QEvent::MouseButtonPress)
