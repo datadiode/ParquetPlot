@@ -6,11 +6,6 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonParseError>
-#include <QJsonValue>
 #include <QProcess>
 
 #ifndef DUCKDB_EXECUTABLE
@@ -20,25 +15,86 @@
 namespace
 {
 
-    QString jsonValueToString(const QJsonValue &value)
+    // RFC 4180 parser: quoted fields may contain separators, quotes ("") and line breaks.
+    void parseCsv(const QByteArray &data, QStringList *header, QVector<QVector<QString>> *rows)
     {
-        if (value.isNull() || value.isUndefined())
+        QVector<QString> record;
+        QByteArray field;
+        bool inQuotes = false;
+        bool haveRecord = false;
+        bool first = true;
+
+        const auto endField = [&]()
         {
-            return QStringLiteral("NULL");
-        }
-        if (value.isBool())
+            record.push_back(QString::fromUtf8(field));
+            field.clear();
+        };
+        const auto endRecord = [&]()
         {
-            return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-        }
-        if (value.isDouble())
+            endField();
+            if (first)
+            {
+                *header = QStringList(record.cbegin(), record.cend());
+                first = false;
+            }
+            else
+            {
+                rows->push_back(std::move(record));
+            }
+            record = QVector<QString>();
+            if (!header->isEmpty())
+                record.reserve(header->size());
+            haveRecord = false;
+        };
+
+        const char *p = data.constData();
+        const char *const end = p + data.size();
+        while (p < end)
         {
-            return value.toVariant().toString();
+            const char c = *p++;
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (p < end && *p == '"')
+                    {
+                        field.append('"');
+                        ++p;
+                    }
+                    else
+                    {
+                        inQuotes = false;
+                    }
+                }
+                else
+                {
+                    field.append(c);
+                }
+                continue;
+            }
+            switch (c)
+            {
+            case '"':
+                inQuotes = true;
+                haveRecord = true;
+                break;
+            case ',':
+                endField();
+                haveRecord = true;
+                break;
+            case '\r':
+                break;
+            case '\n':
+                endRecord();
+                break;
+            default:
+                field.append(c);
+                haveRecord = true;
+                break;
+            }
         }
-        if (value.isArray())
-            return QString::fromUtf8(QJsonDocument(value.toArray()).toJson(QJsonDocument::Compact));
-        if (value.isObject())
-            return QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
-        return value.toString();
+        if (haveRecord || !field.isEmpty() || !record.isEmpty())
+            endRecord();
     }
 
 } // namespace
@@ -99,13 +155,14 @@ bool ParquetDocument::rowCount(const QString &whereClause, qsizetype *count, QSt
     const QString sql = QStringLiteral("SELECT count(*) FROM %1 %2")
                             .arg(parquetSourceSql(), whereClause.isEmpty() ? QString() : QStringLiteral("WHERE %1").arg(whereClause));
 
-    QJsonArray rows;
-    if (!runJsonQuery(sql, &rows, errorMessage))
+    QStringList header;
+    QVector<QVector<QString>> rows;
+    if (!runCsvQuery(sql, &header, &rows, errorMessage))
     {
         return false;
     }
 
-    if (rows.isEmpty() || !rows.first().isObject())
+    if (rows.isEmpty() || rows.first().isEmpty())
     {
         if (errorMessage != nullptr)
         {
@@ -114,17 +171,18 @@ bool ParquetDocument::rowCount(const QString &whereClause, qsizetype *count, QSt
         return false;
     }
 
-    const QJsonObject object = rows.first().toObject();
-    if (object.isEmpty())
+    bool ok = false;
+    const qlonglong value = rows.first().first().toLongLong(&ok);
+    if (!ok)
     {
         if (errorMessage != nullptr)
         {
-            *errorMessage = QStringLiteral("DuckDB returned an empty row count.");
+            *errorMessage = QStringLiteral("DuckDB returned an invalid row count.");
         }
         return false;
     }
 
-    *count = static_cast<qsizetype>(object.constBegin().value().toDouble());
+    *count = static_cast<qsizetype>(value);
     return true;
 }
 
@@ -138,44 +196,35 @@ bool ParquetDocument::queryPage(const QString &whereClause, qsizetype limit, qsi
         sql += QStringLiteral(" LIMIT %1 OFFSET %2").arg(limit).arg(offset);
     }
 
-    QJsonArray rows;
-    if (!runJsonQuery(sql, &rows, errorMessage))
+    QStringList header;
+    QVector<QVector<QString>> rows;
+    if (!runCsvQuery(sql, &header, &rows, errorMessage))
     {
         return false;
     }
 
     QueryPage nextPage;
     nextPage.columns = columnNames();
-    nextPage.rows.reserve(rows.size());
-
-    for (const QJsonValue &rowValue : rows)
+    const qsizetype columnCount = nextPage.columns.size();
+    for (auto &row : rows)
     {
-        if (!rowValue.isObject())
-        {
-            continue;
-        }
-
-        const QJsonObject object = rowValue.toObject();
-        QVector<QString> values;
-        values.reserve(nextPage.columns.size());
-        for (const QString &column : nextPage.columns)
-        {
-            values.push_back(jsonValueToString(object.value(column)));
-        }
-        nextPage.rows.push_back(std::move(values));
+        row.resize(columnCount, QStringLiteral("NULL"));
     }
+    nextPage.rows = std::move(rows);
 
     *page = std::move(nextPage);
     return true;
 }
 
-bool ParquetDocument::runJsonQuery(const QString &sql, QJsonArray *rows, QString *errorMessage)
+bool ParquetDocument::runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<QString>> *rows, QString *errorMessage)
 {
     QProcess process;
     process.setProgram(duckdbExecutable());
     process.setArguments({
         QStringLiteral("-no-init"),
-        QStringLiteral("-json"),
+        QStringLiteral("-csv"),
+        QStringLiteral("-nullvalue"),
+        QStringLiteral("NULL"),
         QStringLiteral("-c"),
         sql,
     });
@@ -206,20 +255,9 @@ bool ParquetDocument::runJsonQuery(const QString &sql, QJsonArray *rows, QString
         return false;
     }
 
-    QJsonParseError parseError;
-    // DuckDB emits no JSON bytes when a query has no matching rows.
-    const QJsonDocument document = QJsonDocument::fromJson(
-        stdoutBytes.trimmed().isEmpty() ? QByteArray("[]") : stdoutBytes, &parseError);
-    if (parseError.error != QJsonParseError::NoError || !document.isArray())
-    {
-        if (errorMessage != nullptr)
-        {
-            *errorMessage = QStringLiteral("Could not parse DuckDB JSON output: %1").arg(parseError.errorString());
-        }
-        return false;
-    }
-
-    *rows = document.array();
+    header->clear();
+    rows->clear();
+    parseCsv(stdoutBytes, header, rows);
     return true;
 }
 
@@ -227,24 +265,31 @@ bool ParquetDocument::loadSchema(QString *errorMessage)
 {
     const QString sql = QStringLiteral("DESCRIBE SELECT * FROM %1").arg(parquetSourceSql());
 
-    QJsonArray rows;
-    if (!runJsonQuery(sql, &rows, errorMessage))
+    QStringList header;
+    QVector<QVector<QString>> rows;
+    if (!runCsvQuery(sql, &header, &rows, errorMessage))
     {
+        return false;
+    }
+
+    const qsizetype nameIndex = header.indexOf(QStringLiteral("column_name"));
+    const qsizetype typeIndex = header.indexOf(QStringLiteral("column_type"));
+    if (nameIndex < 0 || typeIndex < 0)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QStringLiteral("Could not parse DuckDB schema output.");
+        }
         return false;
     }
 
     QVector<ColumnInfo> nextSchema;
     nextSchema.reserve(rows.size());
-    for (const QJsonValue &rowValue : rows)
+    for (const auto &row : rows)
     {
-        if (!rowValue.isObject())
-        {
-            continue;
-        }
-        const QJsonObject object = rowValue.toObject();
         nextSchema.push_back({
-            object.value(QStringLiteral("column_name")).toString(),
-            object.value(QStringLiteral("column_type")).toString(),
+            row.value(nameIndex),
+            row.value(typeIndex),
         });
     }
 

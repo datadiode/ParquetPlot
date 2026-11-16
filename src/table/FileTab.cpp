@@ -291,11 +291,6 @@ bool FileTab::load(QString *errorMessage)
         columnTypes_.insert(column.name, column.type);
     }
     filterBuilder_->setColumns(document_->columnNames());
-    if (!reload())
-    {
-        *errorMessage = statusLabel_->text();
-        return false;
-    }
     return true;
 }
 
@@ -355,7 +350,7 @@ bool FileTab::reload()
 
     currentPageRows_ = page.rows.size();
     model_->setResult(std::move(page.columns), std::move(page.rows), limit < 0 ? 0 : offset_);
-    table_->resizeColumnsToContents();
+    //table_->resizeColumnsToContents(); // too expensive
     updatePageControls(filteredRows);
     return true;
 }

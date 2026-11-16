@@ -39,7 +39,7 @@ public:
     bool queryPage(const QString &whereClause, qsizetype limit, qsizetype offset, QueryPage *page, QString *errorMessage);
 
 private:
-    bool runJsonQuery(const QString &sql, class QJsonArray *rows, QString *errorMessage);
+    bool runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<QString>> *rows, QString *errorMessage);
     bool loadSchema(QString *errorMessage);
     QString parquetSourceSql() const;
     QString duckdbExecutable() const;
