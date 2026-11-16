@@ -186,7 +186,10 @@ void MainWindow::setupUI()
     signal_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     signal_tree->setDragEnabled(true);
     signal_tree->setDragDropMode(QAbstractItemView::DragOnly);
-    signal_tree->setToolTip("Drag signals or groups onto a plot panel to add them");
+    signal_tree->setAcceptDrops(true);
+    signal_tree->viewport()->installEventFilter(this);
+    signal_tree->setToolTip("Drag signals or groups onto a plot panel to add them.\n"
+                            "Drop .parquet files here to open them.");
     plot->setAcceptDrops(true);
     auto *splitter = new QSplitter(Qt::Horizontal, central);
     splitter->addWidget(signal_tree);
@@ -1266,6 +1269,41 @@ void MainWindow::populateSignalTree(const std::vector<std::string> &column_names
     }
 }
 
+void MainWindow::openDroppedParquetFile(const QString &filename)
+{
+    try
+    {
+        const std::string path = filename.toStdString();
+        if (!ParquetReader::hasMetadataTime(path))
+        {
+            selectColumnsForFile(filename, false);
+            return;
+        }
+        const std::vector<std::string> column_names = ParquetReader::columnNames(path);
+        std::shared_ptr<ParquetData> data =
+            ParquetReader::read(path, ParquetReader::kMetadataTimeColumn, {}, {});
+
+        x_column_name = QString::fromUtf8(ParquetReader::kMetadataTimeColumn);
+        signal_column_names.clear();
+        trigger_column_names.clear();
+        signal_settings.clear();
+        target_settings.clear();
+        panel_settings = {PlotPanelSettings{}};
+        current_data = std::move(data);
+        setupPlot(current_data, false);
+
+        current_file_path = filename;
+        populateSignalTree(column_names);
+        filename_label->setText(QString("File: %1").arg(QFileInfo(filename).fileName()));
+        select_columns_btn->setEnabled(true);
+        showPlot();
+    }
+    catch (const std::exception &e)
+    {
+        QMessageBox::critical(this, "Open Parquet File", e.what());
+    }
+}
+
 void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
 {
     QStringList new_signals = signal_column_names;
@@ -1669,6 +1707,32 @@ void MainWindow::refreshFalsePositiveMarkerPositions()
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
+    if (signal_tree && obj == signal_tree->viewport() &&
+        (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove ||
+         event->type() == QEvent::Drop))
+    {
+        auto *drop = static_cast<QDropEvent *>(event);
+        QString parquet_path;
+        if (drop->mimeData()->hasUrls())
+        {
+            for (const QUrl &url : drop->mimeData()->urls())
+            {
+                if (url.isLocalFile() &&
+                    url.toLocalFile().endsWith(".parquet", Qt::CaseInsensitive))
+                {
+                    parquet_path = url.toLocalFile();
+                    break;
+                }
+            }
+        }
+        if (!parquet_path.isEmpty())
+        {
+            drop->acceptProposedAction();
+            if (event->type() == QEvent::Drop)
+                openDroppedParquetFile(parquet_path);
+            return true;
+        }
+    }
     if (obj == plot)
     {
         if (event->type() == QEvent::KeyPress)

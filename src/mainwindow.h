@@ -122,6 +122,7 @@ private:
     QTreeWidget *signal_tree = nullptr;
     void populateSignalTree(const std::vector<std::string> &column_names);
     void addSignalsToPlot(const QStringList &names, int panel);
+    void openDroppedParquetFile(const QString &filename);
     QStackedWidget *view_stack;
     QWidget *plot_page;
     TableBrowser *table_browser;
