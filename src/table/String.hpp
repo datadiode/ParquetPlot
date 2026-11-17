@@ -1,4 +1,4 @@
-/*
+﻿/*
     Lib String
     MIT License, Copyright © 2026 PuqiAR (im@puqiar.top)
 */
@@ -70,7 +70,7 @@ public:
 class String {
 public:
   using u32 = char32_t;
-  static constexpr uint8_t SSO_SIZE = 21;
+  static constexpr uint8_t SSO_SIZE = 23;
 
   enum class Mode : uint8_t {
     ASCII_SSO, // ASCII
@@ -79,24 +79,32 @@ public:
   };
 
 private:
+  // In heap modes the length is solely given by the size of the active vector;
+  // _sso_length is only meaningful in ASCII_SSO mode. mode and _sso_length share
+  // the last byte, which lies beyond the storage of either vector.
   union {
     less::vector<unsigned char> ascii;
     less::vector<u32> utf32;
     struct
     {
         unsigned char sso[SSO_SIZE]; // non null terminate
-        Mode mode;
-        unsigned short _length;
+        Mode mode : 2;
+        unsigned char _sso_length : 6;
     };
   };
 
+  void set_sso_length(size_t n) noexcept {
+    assert(n <= SSO_SIZE);
+    _sso_length = static_cast<unsigned char>(n);
+  }
+
   void copyfrom(const String &other) {
     destroy();
-    _length = other._length;
     mode = other.mode;
+    _sso_length = other._sso_length;
 
     if (mode == Mode::ASCII_SSO) {
-      memcpy(sso, other.sso, sizeof(unsigned char) * _length);
+      memcpy(sso, other.sso, sizeof(unsigned char) * _sso_length);
     } else if (mode == Mode::ASCII_HEP) {
       new (&ascii) less::vector<unsigned char>(other.ascii);
     } else {
@@ -108,11 +116,11 @@ private:
     destroy();
 
     mode = other.mode;
-    _length = other._length;
+    _sso_length = other._sso_length;
 
     switch (mode) {
     case Mode::ASCII_SSO:
-      std::memcpy(sso, other.sso, other._length);
+      std::memcpy(sso, other.sso, other._sso_length);
       break;
 
     case Mode::ASCII_HEP:
@@ -125,7 +133,7 @@ private:
     }
 
     other.mode = Mode::ASCII_SSO;
-    other._length = 0;
+    other._sso_length = 0;
   }
 
   void destroy() noexcept {
@@ -145,10 +153,10 @@ private:
       return;
 
     less::vector<u32> tmp;
-    tmp.reserve(_length);
+    tmp.reserve(size());
 
     if (mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < _length; ++i)
+      for (size_t i = 0; i < _sso_length; ++i)
         tmp.push_back(static_cast<u32>(sso[i]));
     } else // ASCII_HEP
     {
@@ -164,11 +172,10 @@ private:
   void promote_sso_ascii_to_heap() noexcept {
     assert(mode == Mode::ASCII_SSO &&
            "promote_sso_ascii_to_heap: mode is not ascii sso");
-    mode = Mode::ASCII_HEP;
 
     less::vector<unsigned char> tmp;
-    tmp.reserve(_length);
-    for (size_t i = 0; i < _length; ++i)
+    tmp.reserve(_sso_length);
+    for (size_t i = 0; i < _sso_length; ++i)
       tmp.push_back(sso[i]);
 
     mode = Mode::ASCII_HEP;
@@ -184,20 +191,19 @@ private:
   void init(const char *data, size_t n) {
     destroy();
 
-    _length = 0;
+    _sso_length = 0;
 
     // ASCII 快路径
     if (n <= SSO_SIZE && StringUtils::is_pure_ascii(data, n)) {
       mode = Mode::ASCII_SSO;
       std::memcpy(sso, data, n);
-      _length = n;
+      set_sso_length(n);
       return;
     }
 
     if (StringUtils::is_pure_ascii(data, n)) {
       mode = Mode::ASCII_HEP;
       new (&ascii) less::vector<unsigned char>(data, data + n);
-      _length = n;
       return;
     }
 
@@ -214,7 +220,6 @@ private:
     }
 
     utf32.shrink_to_fit();
-    _length = utf32.size();
   }
 
   void init(const u32 *data) {
@@ -228,12 +233,13 @@ private:
   void init(const u32 *data, size_t n) {
     destroy();
 
-    _length = n;
+    _sso_length = 0;
 
     if (n <= SSO_SIZE && StringUtils::is_pure_ascii(data, n)) {
       mode = Mode::ASCII_SSO;
       for (size_t i = 0; i < n; ++i)
         sso[i] = static_cast<unsigned char>(data[i]);
+      set_sso_length(n);
       return;
     }
 
@@ -252,10 +258,16 @@ private:
   }
 
 public:
-  size_t length() const noexcept { return _length; }
-  size_t size() const noexcept { return _length; }
+  size_t size() const noexcept {
+    if (mode == Mode::ASCII_SSO)
+      return _sso_length;
+    if (mode == Mode::ASCII_HEP)
+      return ascii.size();
+    return utf32.size();
+  }
+  size_t length() const noexcept { return size(); }
 
-  bool empty() const noexcept { return _length == 0; }
+  bool empty() const noexcept { return size() == 0; }
   void reserve(size_t n) {
     if (mode == Mode::ASCII_HEP)
       ascii.reserve(n);
@@ -264,11 +276,9 @@ public:
   }
 
   void clear() noexcept {
-    _length = 0;
     if (mode == Mode::ASCII_SSO) {
-      // pass
-    }
-    if (mode == Mode::ASCII_HEP) {
+      _sso_length = 0;
+    } else if (mode == Mode::ASCII_HEP) {
       ascii.clear();
     } else {
       utf32.clear();
@@ -278,7 +288,7 @@ public:
   void shrink_to_fit() noexcept {
     if (mode == Mode::ASCII_HEP) {
       ascii.shrink_to_fit();
-    } else {
+    } else if (mode == Mode::UTF32_HEP) {
       utf32.shrink_to_fit();
     }
   }
@@ -286,7 +296,7 @@ public:
   ~String() noexcept { destroy(); }
   String() noexcept {
     mode = Mode::ASCII_SSO;
-    _length = 0;
+    _sso_length = 0;
   }
   String(const String &other) noexcept : String() { copyfrom(other); }
   String(String &&other) noexcept : String() { movefrom(std::move(other)); }
@@ -317,7 +327,7 @@ public:
   }
 
   String &operator+=(const String &rhs) {
-    if (rhs._length == 0)
+    if (rhs.size() == 0)
       return *this;
 
     // 两边都是 ASCII
@@ -326,16 +336,16 @@ public:
         (rhs.mode == Mode::ASCII_SSO || rhs.mode == Mode::ASCII_HEP);
 
     if (this_ascii && rhs_ascii) {
-      size_t newlen = _length + rhs._length;
+      size_t newlen = size() + rhs.size();
 
       // SSO 可容纳
       if (mode == Mode::ASCII_SSO && newlen <= SSO_SIZE) {
         if (rhs.mode == Mode::ASCII_SSO)
-          std::memcpy(sso + _length, rhs.sso, rhs._length);
+          std::memcpy(sso + size(), rhs.sso, rhs.size());
         else
-          std::memcpy(sso + _length, rhs.ascii.data(), rhs._length);
+          std::memcpy(sso + size(), rhs.ascii.data(), rhs.size());
 
-        _length = newlen;
+        set_sso_length(newlen);
         return *this;
       }
 
@@ -344,11 +354,10 @@ public:
 
       // 追加
       if (rhs.mode == Mode::ASCII_SSO)
-        ascii.insert(ascii.end(), rhs.sso, rhs.sso + rhs._length);
+        ascii.insert(ascii.end(), rhs.sso, rhs.sso + rhs.size());
       else
         ascii.insert(ascii.end(), rhs.ascii.begin(), rhs.ascii.end());
 
-      _length = newlen;
       return *this;
     }
 
@@ -356,10 +365,10 @@ public:
 
     if (mode != Mode::UTF32_HEP) {
       less::vector<u32> tmp;
-      tmp.reserve(_length + rhs._length);
+      tmp.reserve(size() + rhs.size());
 
       if (mode == Mode::ASCII_SSO) {
-        for (size_t i = 0; i < _length; ++i)
+        for (size_t i = 0; i < size(); ++i)
           tmp.push_back(static_cast<u32>(sso[i]));
       } else // ASCII_HEP
       {
@@ -375,7 +384,7 @@ public:
     if (rhs.mode == Mode::UTF32_HEP) {
       utf32.insert(utf32.end(), rhs.utf32.begin(), rhs.utf32.end());
     } else if (rhs.mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < rhs._length; ++i)
+      for (size_t i = 0; i < rhs.size(); ++i)
         utf32.push_back(static_cast<u32>(rhs.sso[i]));
     } else // ASCII_HEP
     {
@@ -383,7 +392,6 @@ public:
         utf32.push_back(static_cast<u32>(c));
     }
 
-    _length = utf32.size();
     return *this;
   }
 
@@ -399,8 +407,9 @@ public:
 
   void push_back(u32 cp) {
     if (cp < 128) {
-      if (mode == Mode::ASCII_SSO && _length < SSO_SIZE) {
-        sso[_length++] = static_cast<unsigned char>(cp);
+      if (mode == Mode::ASCII_SSO && size() < SSO_SIZE) {
+        sso[_sso_length] = static_cast<unsigned char>(cp);
+        set_sso_length(_sso_length + 1u);
         return;
       }
 
@@ -409,32 +418,28 @@ public:
 
       if (mode == Mode::ASCII_HEP) {
         ascii.push_back(static_cast<unsigned char>(cp));
-        ++_length;
         return;
       }
     }
 
     ensure_utf32();
     utf32.push_back(cp);
-    _length = utf32.size();
   }
 
   void pop_back() {
-    assert(_length > 0);
+    assert(size() > 0);
 
     if (mode == Mode::ASCII_SSO) {
-      --_length;
+      set_sso_length(_sso_length - 1u);
       return;
     }
 
     if (mode == Mode::ASCII_HEP) {
       ascii.pop_back();
-      --_length;
       return;
     }
 
     utf32.pop_back();
-    _length = utf32.size();
   }
 
   String &append(const char *utf8) {
@@ -456,29 +461,29 @@ public:
   }
 
   void resize(size_t new_size, u32 fill = 0) {
-    if (new_size <= _length) {
+    if (new_size <= size()) {
       erase(new_size);
       return;
     }
 
-    append(new_size - _length, fill);
+    append(new_size - size(), fill);
   }
 
   u32 front() const {
-    assert(_length > 0);
+    assert(size() > 0);
     return (*this)[0];
   }
 
   u32 back() const {
-    assert(_length > 0);
-    return (*this)[_length - 1];
+    assert(size() > 0);
+    return (*this)[size() - 1];
   }
 
   std::string toStdString() const {
     std::string out;
 
     if (mode == Mode::ASCII_SSO) {
-      out.assign(reinterpret_cast<const char *>(sso), _length);
+      out.assign(reinterpret_cast<const char *>(sso), size());
       return out;
     }
 
@@ -514,13 +519,13 @@ public:
   }
 
   friend bool operator==(const String &a, const String &b) noexcept {
-    if (a._length != b._length)
+    if (a.size() != b.size())
       return false;
 
     // 同模式
     if (a.mode == b.mode) {
       if (a.mode == Mode::ASCII_SSO)
-        return std::memcmp(a.sso, b.sso, a._length) == 0;
+        return std::memcmp(a.sso, b.sso, a.size()) == 0;
 
       if (a.mode == Mode::ASCII_HEP)
         return a.ascii == b.ascii;
@@ -536,9 +541,9 @@ public:
 
     if (a_ascii && b_ascii) {
       if (a.mode == Mode::ASCII_SSO)
-        return std::memcmp(a.sso, b.ascii.data(), a._length) == 0;
+        return std::memcmp(a.sso, b.ascii.data(), a.size()) == 0;
       else
-        return std::memcmp(a.ascii.data(), b.sso, a._length) == 0;
+        return std::memcmp(a.ascii.data(), b.sso, a.size()) == 0;
     }
 
     // ASCII / UTF32
@@ -546,11 +551,11 @@ public:
     const String &utf32_str = a_ascii ? b : a;
 
     if (ascii_str.mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < ascii_str._length; ++i)
+      for (size_t i = 0; i < ascii_str.size(); ++i)
         if (static_cast<u32>(ascii_str.sso[i]) != utf32_str.utf32[i])
           return false;
     } else {
-      for (size_t i = 0; i < ascii_str._length; ++i)
+      for (size_t i = 0; i < ascii_str.size(); ++i)
         if (static_cast<u32>(ascii_str.ascii[i]) != utf32_str.utf32[i])
           return false;
     }
@@ -566,7 +571,7 @@ public:
 
   // read only
   u32 operator[](size_t i) const {
-    assert(i < _length);
+    assert(i < size());
 
     if (mode == Mode::ASCII_SSO)
       return static_cast<u32>(sso[i]);
@@ -575,16 +580,16 @@ public:
     return utf32[i];
   }
   u32 at(size_t i) const {
-    if (i >= _length)
+    if (i >= size())
       throw std::out_of_range("String::at");
     return (*this)[i];
   }
 
   bool starts_with(const String &prefix) const {
-    if (prefix._length > _length)
+    if (prefix.size() > size())
       return false;
 
-    for (size_t i = 0; i < prefix._length; ++i)
+    for (size_t i = 0; i < prefix.size(); ++i)
       if ((*this)[i] != prefix[i])
         return false;
 
@@ -592,12 +597,12 @@ public:
   }
 
   bool ends_with(const String &suffix) const {
-    if (suffix._length > _length)
+    if (suffix.size() > size())
       return false;
 
-    size_t offset = _length - suffix._length;
+    size_t offset = size() - suffix.size();
 
-    for (size_t i = 0; i < suffix._length; ++i)
+    for (size_t i = 0; i < suffix.size(); ++i)
       if ((*this)[offset + i] != suffix[i])
         return false;
 
@@ -606,7 +611,7 @@ public:
 
   bool contains(u32 cp) const {
     if (mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < _length; ++i)
+      for (size_t i = 0; i < size(); ++i)
         if (sso[i] == cp)
           return true;
       return false;
@@ -629,10 +634,10 @@ public:
   }
 
   String substr(size_t pos, size_t count = size_t(-1)) const {
-    if (pos >= _length)
+    if (pos >= size())
       return String();
 
-    size_t len = (_length - pos < count) ? (_length - pos) : count;
+    size_t len = (size() - pos < count) ? (size() - pos) : count;
 
     String out;
 
@@ -641,11 +646,10 @@ public:
       if (len <= SSO_SIZE) {
         out.mode = Mode::ASCII_SSO;
         std::memcpy(out.sso, sso + pos, len);
-        out._length = len;
+        out.set_sso_length(len);
       } else {
         out.mode = Mode::ASCII_HEP;
         new (&out.ascii) less::vector<unsigned char>(sso + pos, sso + pos + len);
-        out._length = len;
       }
       return out;
     }
@@ -655,12 +659,11 @@ public:
       if (len <= SSO_SIZE) {
         out.mode = Mode::ASCII_SSO;
         std::memcpy(out.sso, ascii.data() + pos, len);
-        out._length = len;
+        out.set_sso_length(len);
       } else {
         out.mode = Mode::ASCII_HEP;
         new (&out.ascii) less::vector<unsigned char>(ascii.begin() + pos,
                                                     ascii.begin() + pos + len);
-        out._length = len;
       }
       return out;
     }
@@ -669,37 +672,34 @@ public:
     out.mode = Mode::UTF32_HEP;
     new (&out.utf32)
         less::vector<u32>(utf32.begin() + pos, utf32.begin() + pos + len);
-    out._length = len;
     return out;
   }
 
   String &erase(size_t pos, size_t count = size_t(-1)) {
-    if (pos >= _length)
+    if (pos >= size())
       return *this;
 
-    size_t len = (_length - pos < count) ? (_length - pos) : count;
+    size_t len = (size() - pos < count) ? (size() - pos) : count;
 
     if (mode == Mode::ASCII_SSO) {
-      std::memmove(sso + pos, sso + pos + len, _length - pos - len);
-      _length -= len;
+      std::memmove(sso + pos, sso + pos + len, size() - pos - len);
+      set_sso_length(size() - len);
       return *this;
     }
 
     if (mode == Mode::ASCII_HEP) {
       ascii.erase(ascii.begin() + pos, ascii.begin() + pos + len);
-      _length -= len;
       return *this;
     }
 
     utf32.erase(utf32.begin() + pos, utf32.begin() + pos + len);
-    _length = utf32.size();
     return *this;
   }
 
   String &insert(size_t pos, const String &other) {
-    if (pos > _length)
-      pos = _length;
-    if (other._length == 0)
+    if (pos > size())
+      pos = size();
+    if (other.size() == 0)
       return *this;
 
     bool this_ascii = (mode != Mode::UTF32_HEP);
@@ -707,17 +707,17 @@ public:
 
     // ASCII 合并路径
     if (this_ascii && other_ascii) {
-      size_t newlen = _length + other._length;
+      size_t newlen = size() + other.size();
 
       if (mode == Mode::ASCII_SSO && newlen <= SSO_SIZE) {
-        std::memmove(sso + pos + other._length, sso + pos, _length - pos);
+        std::memmove(sso + pos + other.size(), sso + pos, size() - pos);
 
         if (other.mode == Mode::ASCII_SSO)
-          std::memcpy(sso + pos, other.sso, other._length);
+          std::memcpy(sso + pos, other.sso, other.size());
         else
-          std::memcpy(sso + pos, other.ascii.data(), other._length);
+          std::memcpy(sso + pos, other.ascii.data(), other.size());
 
-        _length = newlen;
+        set_sso_length(newlen);
         return *this;
       }
 
@@ -725,12 +725,11 @@ public:
         promote_sso_ascii_to_heap();
 
       if (other.mode == Mode::ASCII_SSO)
-        ascii.insert(ascii.begin() + pos, other.sso, other.sso + other._length);
+        ascii.insert(ascii.begin() + pos, other.sso, other.sso + other.size());
       else
         ascii.insert(ascii.begin() + pos, other.ascii.begin(),
                      other.ascii.end());
 
-      _length = newlen;
       return *this;
     }
 
@@ -740,18 +739,17 @@ public:
     if (other.mode == Mode::UTF32_HEP)
       utf32.insert(utf32.begin() + pos, other.utf32.begin(), other.utf32.end());
     else if (other.mode == Mode::ASCII_SSO)
-      for (size_t i = 0; i < other._length; ++i)
+      for (size_t i = 0; i < other.size(); ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(other.sso[i]));
     else
-      for (size_t i = 0; i < other._length; ++i)
+      for (size_t i = 0; i < other.size(); ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(other.ascii[i]));
 
-    _length = utf32.size();
     return *this;
   }
 
   int compare(const String &other) const noexcept {
-    size_t n = (_length < other._length) ? _length : other._length;
+    size_t n = (size() < other.size()) ? size() : other.size();
 
     for (size_t i = 0; i < n; ++i) {
       u32 a = (*this)[i];
@@ -760,26 +758,26 @@ public:
         return (a < b) ? -1 : 1;
     }
 
-    if (_length == other._length)
+    if (size() == other.size())
       return 0;
-    return (_length < other._length) ? -1 : 1;
+    return (size() < other.size()) ? -1 : 1;
   }
 
   size_t find(const String &needle, size_t pos = 0) const {
-    if (needle._length == 0)
-      return pos <= _length ? pos : size_t(-1);
-    if (needle._length > _length || pos >= _length)
+    if (needle.size() == 0)
+      return pos <= size() ? pos : size_t(-1);
+    if (needle.size() > size() || pos >= size())
       return size_t(-1);
 
-    size_t limit = _length - needle._length;
+    size_t limit = size() - needle.size();
 
     for (size_t i = pos; i <= limit; ++i) {
       size_t j = 0;
-      for (; j < needle._length; ++j)
+      for (; j < needle.size(); ++j)
         if ((*this)[i + j] != needle[j])
           break;
 
-      if (j == needle._length)
+      if (j == needle.size())
         return i;
     }
 
@@ -787,18 +785,18 @@ public:
   }
 
   size_t rfind(const String &needle) const {
-    if (needle._length == 0)
-      return _length;
-    if (needle._length > _length)
+    if (needle.size() == 0)
+      return size();
+    if (needle.size() > size())
       return size_t(-1);
 
-    for (size_t i = _length - needle._length + 1; i-- > 0;) {
+    for (size_t i = size() - needle.size() + 1; i-- > 0;) {
       size_t j = 0;
-      for (; j < needle._length; ++j)
+      for (; j < needle.size(); ++j)
         if ((*this)[i + j] != needle[j])
           break;
 
-      if (j == needle._length)
+      if (j == needle.size())
         return i;
     }
 
@@ -806,29 +804,29 @@ public:
   }
 
   String &replace(size_t pos, size_t len, const String &repl) {
-    if (pos >= _length)
+    if (pos >= size())
       return *this;
 
-    size_t erase_len = (_length - pos < len) ? (_length - pos) : len;
+    size_t erase_len = (size() - pos < len) ? (size() - pos) : len;
 
     // ASCII路径
     bool this_ascii = (mode != Mode::UTF32_HEP);
     bool repl_ascii = (repl.mode != Mode::UTF32_HEP);
 
     if (this_ascii && repl_ascii) {
-      size_t newlen = _length - erase_len + repl._length;
+      size_t newlen = size() - erase_len + repl.size();
 
       // SSO容纳
       if (mode == Mode::ASCII_SSO && newlen <= SSO_SIZE) {
-        std::memmove(sso + pos + repl._length, sso + pos + erase_len,
-                     _length - pos - erase_len);
+        std::memmove(sso + pos + repl.size(), sso + pos + erase_len,
+                     size() - pos - erase_len);
 
         if (repl.mode == Mode::ASCII_SSO)
-          std::memcpy(sso + pos, repl.sso, repl._length);
+          std::memcpy(sso + pos, repl.sso, repl.size());
         else
-          std::memcpy(sso + pos, repl.ascii.data(), repl._length);
+          std::memcpy(sso + pos, repl.ascii.data(), repl.size());
 
-        _length = newlen;
+        set_sso_length(newlen);
         return *this;
       }
 
@@ -838,11 +836,10 @@ public:
       ascii.erase(ascii.begin() + pos, ascii.begin() + pos + erase_len);
 
       if (repl.mode == Mode::ASCII_SSO)
-        ascii.insert(ascii.begin() + pos, repl.sso, repl.sso + repl._length);
+        ascii.insert(ascii.begin() + pos, repl.sso, repl.sso + repl.size());
       else
         ascii.insert(ascii.begin() + pos, repl.ascii.begin(), repl.ascii.end());
 
-      _length = newlen;
       return *this;
     }
 
@@ -854,16 +851,21 @@ public:
     if (repl.mode == Mode::UTF32_HEP)
       utf32.insert(utf32.begin() + pos, repl.utf32.begin(), repl.utf32.end());
     else if (repl.mode == Mode::ASCII_SSO)
-      for (size_t i = 0; i < repl._length; ++i)
+      for (size_t i = 0; i < repl.size(); ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(repl.sso[i]));
     else
-      for (size_t i = 0; i < repl._length; ++i)
+      for (size_t i = 0; i < repl.size(); ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(repl.ascii[i]));
 
-    _length = utf32.size();
     return *this;
   }
 };
+
+// mode/_sso_length must live past the end of either vector so that they
+// survive placement-new of the heap representation.
+static_assert(sizeof(less::vector<unsigned char>) <= String::SSO_SIZE);
+static_assert(sizeof(less::vector<char32_t>) <= String::SSO_SIZE);
+static_assert(sizeof(String) == String::SSO_SIZE + 1);
 }; // namespace PuqiAR::LibString
 
 namespace std {
@@ -878,7 +880,7 @@ template <> struct hash<PuqiAR::LibString::String> {
     size_t h = FNV_offset;
 
     if (s.mode == String::Mode::ASCII_SSO) {
-      for (size_t i = 0; i < s._length; ++i) {
+      for (size_t i = 0; i < s.size(); ++i) {
         h ^= s.sso[i];
         h *= FNV_prime;
       }
