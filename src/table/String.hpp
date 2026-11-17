@@ -98,6 +98,29 @@ private:
     _sso_length = static_cast<unsigned char>(n);
   }
 
+  // Invokes f(const T *data, size_t size) with T = unsigned char for ASCII
+  // modes and T = u32 for UTF32_HEP, so loops need not re-dispatch per char.
+  template <class F> auto with_data(F &&f) const {
+    if (mode == Mode::ASCII_SSO)
+      return f(static_cast<const unsigned char *>(sso), size_t(_sso_length));
+    if (mode == Mode::ASCII_HEP)
+      return f(static_cast<const unsigned char *>(ascii.data()),
+               size_t(ascii.size()));
+    return f(static_cast<const u32 *>(utf32.data()), size_t(utf32.size()));
+  }
+
+  template <class A, class B>
+  static bool equal_range(const A *a, const B *b, size_t n) noexcept {
+    if constexpr (sizeof(A) == sizeof(B))
+      return n == 0 || std::memcmp(a, b, n * sizeof(A)) == 0;
+    else {
+      for (size_t i = 0; i < n; ++i)
+        if (static_cast<u32>(a[i]) != static_cast<u32>(b[i]))
+          return false;
+      return true;
+    }
+  }
+
   void copyfrom(const String &other) {
     destroy();
     mode = other.mode;
@@ -586,27 +609,19 @@ public:
   }
 
   bool starts_with(const String &prefix) const {
-    if (prefix.size() > size())
-      return false;
-
-    for (size_t i = 0, n = prefix.size(); i < n; ++i)
-      if ((*this)[i] != prefix[i])
-        return false;
-
-    return true;
+    return with_data([&](auto a, size_t an) {
+      return prefix.with_data([&](auto b, size_t bn) {
+        return bn <= an && equal_range(a, b, bn);
+      });
+    });
   }
 
   bool ends_with(const String &suffix) const {
-    if (suffix.size() > size())
-      return false;
-
-    size_t offset = size() - suffix.size();
-
-    for (size_t i = 0, n = suffix.size(); i < n; ++i)
-      if ((*this)[offset + i] != suffix[i])
-        return false;
-
-    return true;
+    return with_data([&](auto a, size_t an) {
+      return suffix.with_data([&](auto b, size_t bn) {
+        return bn <= an && equal_range(a + (an - bn), b, bn);
+      });
+    });
   }
 
   bool contains(u32 cp) const {
@@ -749,64 +764,55 @@ public:
   }
 
   int compare(const String &other) const noexcept {
-    const size_t this_size = size();
-    const size_t other_size = other.size();
-    size_t n = (this_size < other_size) ? this_size : other_size;
-
-    for (size_t i = 0; i < n; ++i) {
-      u32 a = (*this)[i];
-      u32 b = other[i];
-      if (a != b)
-        return (a < b) ? -1 : 1;
-    }
-
-    if (this_size == other_size)
-      return 0;
-    return (this_size < other_size) ? -1 : 1;
+    return with_data([&](auto a, size_t an) {
+      return other.with_data([&](auto b, size_t bn) {
+        const size_t n = (an < bn) ? an : bn;
+        for (size_t i = 0; i < n; ++i) {
+          const u32 x = static_cast<u32>(a[i]);
+          const u32 y = static_cast<u32>(b[i]);
+          if (x != y)
+            return (x < y) ? -1 : 1;
+        }
+        if (an == bn)
+          return 0;
+        return (an < bn) ? -1 : 1;
+      });
+    });
   }
 
   size_t find(const String &needle, size_t pos = 0) const {
-    const size_t this_size = size();
-    const size_t needle_size = needle.size();
-    if (needle_size == 0)
-      return pos <= this_size ? pos : size_t(-1);
-    if (needle_size > this_size || pos >= this_size)
-      return size_t(-1);
-
-    size_t limit = this_size - needle_size;
-
-    for (size_t i = pos; i <= limit; ++i) {
-      size_t j = 0;
-      for (; j < needle_size; ++j)
-        if ((*this)[i + j] != needle[j])
-          break;
-
-      if (j == needle_size)
-        return i;
-    }
-
-    return size_t(-1);
+    return with_data([&](auto h, size_t hn) {
+      return needle.with_data([&](auto nd, size_t nn) -> size_t {
+        if (nn == 0)
+          return pos <= hn ? pos : size_t(-1);
+        if (nn > hn || pos >= hn)
+          return size_t(-1);
+        const size_t limit = hn - nn;
+        const u32 first = static_cast<u32>(nd[0]);
+        for (size_t i = pos; i <= limit; ++i)
+          if (static_cast<u32>(h[i]) == first &&
+              equal_range(h + i + 1, nd + 1, nn - 1))
+            return i;
+        return size_t(-1);
+      });
+    });
   }
 
   size_t rfind(const String &needle) const {
-    const size_t this_size = size();
-    const size_t needle_size = needle.size();
-    if (needle_size == 0)
-      return this_size;
-    if (needle_size > this_size)
-      return size_t(-1);
-
-    for (size_t i = this_size - needle_size + 1; i-- > 0;) {
-      size_t j = 0;
-      for (; j < needle_size; ++j)
-        if ((*this)[i + j] != needle[j])
-          break;
-
-      if (j == needle_size)
-        return i;
-    }
-
-    return size_t(-1);
+    return with_data([&](auto h, size_t hn) {
+      return needle.with_data([&](auto nd, size_t nn) -> size_t {
+        if (nn == 0)
+          return hn;
+        if (nn > hn)
+          return size_t(-1);
+        const u32 first = static_cast<u32>(nd[0]);
+        for (size_t i = hn - nn + 1; i-- > 0;)
+          if (static_cast<u32>(h[i]) == first &&
+              equal_range(h + i + 1, nd + 1, nn - 1))
+            return i;
+        return size_t(-1);
+      });
+    });
   }
 
   String &replace(size_t pos, size_t len, const String &repl) {
