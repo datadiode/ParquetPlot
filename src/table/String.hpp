@@ -368,7 +368,7 @@ public:
       tmp.reserve(size() + rhs.size());
 
       if (mode == Mode::ASCII_SSO) {
-        for (size_t i = 0; i < size(); ++i)
+        for (size_t i = 0, n = size(); i < n; ++i)
           tmp.push_back(static_cast<u32>(sso[i]));
       } else // ASCII_HEP
       {
@@ -384,7 +384,7 @@ public:
     if (rhs.mode == Mode::UTF32_HEP) {
       utf32.insert(utf32.end(), rhs.utf32.begin(), rhs.utf32.end());
     } else if (rhs.mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < rhs.size(); ++i)
+      for (size_t i = 0, n = rhs.size(); i < n; ++i)
         utf32.push_back(static_cast<u32>(rhs.sso[i]));
     } else // ASCII_HEP
     {
@@ -551,11 +551,11 @@ public:
     const String &utf32_str = a_ascii ? b : a;
 
     if (ascii_str.mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < ascii_str.size(); ++i)
+      for (size_t i = 0, n = ascii_str.size(); i < n; ++i)
         if (static_cast<u32>(ascii_str.sso[i]) != utf32_str.utf32[i])
           return false;
     } else {
-      for (size_t i = 0; i < ascii_str.size(); ++i)
+      for (size_t i = 0, n = ascii_str.size(); i < n; ++i)
         if (static_cast<u32>(ascii_str.ascii[i]) != utf32_str.utf32[i])
           return false;
     }
@@ -589,7 +589,7 @@ public:
     if (prefix.size() > size())
       return false;
 
-    for (size_t i = 0; i < prefix.size(); ++i)
+    for (size_t i = 0, n = prefix.size(); i < n; ++i)
       if ((*this)[i] != prefix[i])
         return false;
 
@@ -602,7 +602,7 @@ public:
 
     size_t offset = size() - suffix.size();
 
-    for (size_t i = 0; i < suffix.size(); ++i)
+    for (size_t i = 0, n = suffix.size(); i < n; ++i)
       if ((*this)[offset + i] != suffix[i])
         return false;
 
@@ -611,7 +611,7 @@ public:
 
   bool contains(u32 cp) const {
     if (mode == Mode::ASCII_SSO) {
-      for (size_t i = 0; i < size(); ++i)
+      for (size_t i = 0, n = size(); i < n; ++i)
         if (sso[i] == cp)
           return true;
       return false;
@@ -739,17 +739,19 @@ public:
     if (other.mode == Mode::UTF32_HEP)
       utf32.insert(utf32.begin() + pos, other.utf32.begin(), other.utf32.end());
     else if (other.mode == Mode::ASCII_SSO)
-      for (size_t i = 0; i < other.size(); ++i)
+      for (size_t i = 0, n = other.size(); i < n; ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(other.sso[i]));
     else
-      for (size_t i = 0; i < other.size(); ++i)
+      for (size_t i = 0, n = other.size(); i < n; ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(other.ascii[i]));
 
     return *this;
   }
 
   int compare(const String &other) const noexcept {
-    size_t n = (size() < other.size()) ? size() : other.size();
+    const size_t this_size = size();
+    const size_t other_size = other.size();
+    size_t n = (this_size < other_size) ? this_size : other_size;
 
     for (size_t i = 0; i < n; ++i) {
       u32 a = (*this)[i];
@@ -758,26 +760,28 @@ public:
         return (a < b) ? -1 : 1;
     }
 
-    if (size() == other.size())
+    if (this_size == other_size)
       return 0;
-    return (size() < other.size()) ? -1 : 1;
+    return (this_size < other_size) ? -1 : 1;
   }
 
   size_t find(const String &needle, size_t pos = 0) const {
-    if (needle.size() == 0)
-      return pos <= size() ? pos : size_t(-1);
-    if (needle.size() > size() || pos >= size())
+    const size_t this_size = size();
+    const size_t needle_size = needle.size();
+    if (needle_size == 0)
+      return pos <= this_size ? pos : size_t(-1);
+    if (needle_size > this_size || pos >= this_size)
       return size_t(-1);
 
-    size_t limit = size() - needle.size();
+    size_t limit = this_size - needle_size;
 
     for (size_t i = pos; i <= limit; ++i) {
       size_t j = 0;
-      for (; j < needle.size(); ++j)
+      for (; j < needle_size; ++j)
         if ((*this)[i + j] != needle[j])
           break;
 
-      if (j == needle.size())
+      if (j == needle_size)
         return i;
     }
 
@@ -785,18 +789,20 @@ public:
   }
 
   size_t rfind(const String &needle) const {
-    if (needle.size() == 0)
-      return size();
-    if (needle.size() > size())
+    const size_t this_size = size();
+    const size_t needle_size = needle.size();
+    if (needle_size == 0)
+      return this_size;
+    if (needle_size > this_size)
       return size_t(-1);
 
-    for (size_t i = size() - needle.size() + 1; i-- > 0;) {
+    for (size_t i = this_size - needle_size + 1; i-- > 0;) {
       size_t j = 0;
-      for (; j < needle.size(); ++j)
+      for (; j < needle_size; ++j)
         if ((*this)[i + j] != needle[j])
           break;
 
-      if (j == needle.size())
+      if (j == needle_size)
         return i;
     }
 
@@ -851,10 +857,10 @@ public:
     if (repl.mode == Mode::UTF32_HEP)
       utf32.insert(utf32.begin() + pos, repl.utf32.begin(), repl.utf32.end());
     else if (repl.mode == Mode::ASCII_SSO)
-      for (size_t i = 0; i < repl.size(); ++i)
+      for (size_t i = 0, n = repl.size(); i < n; ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(repl.sso[i]));
     else
-      for (size_t i = 0; i < repl.size(); ++i)
+      for (size_t i = 0, n = repl.size(); i < n; ++i)
         utf32.insert(utf32.begin() + pos + i, static_cast<u32>(repl.ascii[i]));
 
     return *this;
@@ -880,7 +886,7 @@ template <> struct hash<PuqiAR::LibString::String> {
     size_t h = FNV_offset;
 
     if (s.mode == String::Mode::ASCII_SSO) {
-      for (size_t i = 0; i < s.size(); ++i) {
+      for (size_t i = 0, n = s.size(); i < n; ++i) {
         h ^= s.sso[i];
         h *= FNV_prime;
       }
