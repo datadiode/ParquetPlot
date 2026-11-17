@@ -5,6 +5,9 @@
 
 #include <QAbstractTableModel>
 #include <QVector>
+#include "String.hpp"
+
+using CellString = PuqiAR::LibString::String;
 
 class ParquetTableModel final : public QAbstractTableModel
 {
@@ -18,11 +21,11 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
-    void setResult(QStringList columns, QVector<QVector<QString>> rows, qsizetype absoluteOffset);
+    void setResult(QStringList columns, QVector<QVector<CellString>> rows, qsizetype absoluteOffset);
     void clear();
 
 private:
     QStringList columns_;
-    QVector<QVector<QString>> rows_;
+    QVector<QVector<CellString>> rows_;
     qsizetype absoluteOffset_ = 0;
 };

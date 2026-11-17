@@ -36,7 +36,7 @@ QVariant ParquetTableModel::data(const QModelIndex &index, int role) const
         return {};
     }
 
-    return row.at(index.column());
+    return QString::fromStdString(row.at(index.column()).toStdString());
 }
 
 QVariant ParquetTableModel::headerData(int section, Qt::Orientation orientation, int role) const
@@ -58,7 +58,7 @@ QVariant ParquetTableModel::headerData(int section, Qt::Orientation orientation,
     return absoluteOffset_ + section + 1;
 }
 
-void ParquetTableModel::setResult(QStringList columns, QVector<QVector<QString>> rows, qsizetype absoluteOffset)
+void ParquetTableModel::setResult(QStringList columns, QVector<QVector<CellString>> rows, qsizetype absoluteOffset)
 {
     beginResetModel();
     columns_ = std::move(columns);

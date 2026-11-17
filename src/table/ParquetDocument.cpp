@@ -16,17 +16,17 @@ namespace
 {
 
     // RFC 4180 parser: quoted fields may contain separators, quotes ("") and line breaks.
-    void parseCsv(const QByteArray &data, QStringList *header, QVector<QVector<QString>> *rows)
+    void parseCsv(const QByteArray &data, QStringList *header, QVector<QVector<CellString>> *rows)
     {
-        QVector<QString> record;
-        QByteArray field;
+        QVector<CellString> record;
+        CellString field;
         bool inQuotes = false;
         bool haveRecord = false;
         bool first = true;
 
         const auto endField = [&]()
         {
-            record.push_back(QString::fromUtf8(field));
+            record.push_back(field);
             field.clear();
         };
         const auto endRecord = [&]()
@@ -34,14 +34,17 @@ namespace
             endField();
             if (first)
             {
-                *header = QStringList(record.cbegin(), record.cend());
+                for(auto &value : record)
+                {
+                    header->push_back(QString::fromStdString(value.toStdString()));
+                }
                 first = false;
             }
             else
             {
                 rows->push_back(std::move(record));
             }
-            record = QVector<QString>();
+            record.clear();
             if (!header->isEmpty())
                 record.reserve(header->size());
             haveRecord = false;
@@ -58,7 +61,7 @@ namespace
                 {
                     if (p < end && *p == '"')
                     {
-                        field.append('"');
+                        field.push_back('"');
                         ++p;
                     }
                     else
@@ -68,7 +71,7 @@ namespace
                 }
                 else
                 {
-                    field.append(c);
+                    field.push_back(c);
                 }
                 continue;
             }
@@ -88,12 +91,12 @@ namespace
                 endRecord();
                 break;
             default:
-                field.append(c);
+                field.push_back(c);
                 haveRecord = true;
                 break;
             }
         }
-        if (haveRecord || !field.isEmpty() || !record.isEmpty())
+        if (haveRecord || !field.empty() || !record.empty())
             endRecord();
     }
 
@@ -156,7 +159,7 @@ bool ParquetDocument::rowCount(const QString &whereClause, qsizetype *count, QSt
                             .arg(parquetSourceSql(), whereClause.isEmpty() ? QString() : QStringLiteral("WHERE %1").arg(whereClause));
 
     QStringList header;
-    QVector<QVector<QString>> rows;
+    QVector<QVector<CellString>> rows;
     if (!runCsvQuery(sql, &header, &rows, errorMessage))
     {
         return false;
@@ -172,7 +175,7 @@ bool ParquetDocument::rowCount(const QString &whereClause, qsizetype *count, QSt
     }
 
     bool ok = false;
-    const qlonglong value = rows.first().first().toLongLong(&ok);
+    const qlonglong value = QString::fromStdString(rows.first().first().toStdString()).toLongLong(&ok);
     if (!ok)
     {
         if (errorMessage != nullptr)
@@ -197,7 +200,7 @@ bool ParquetDocument::queryPage(const QString &whereClause, qsizetype limit, qsi
     }
 
     QStringList header;
-    QVector<QVector<QString>> rows;
+    QVector<QVector<CellString>> rows;
     if (!runCsvQuery(sql, &header, &rows, errorMessage))
     {
         return false;
@@ -208,7 +211,7 @@ bool ParquetDocument::queryPage(const QString &whereClause, qsizetype limit, qsi
     const qsizetype columnCount = nextPage.columns.size();
     for (auto &row : rows)
     {
-        row.resize(columnCount, QStringLiteral("NULL"));
+        row.resize(columnCount, "NULL");
     }
     nextPage.rows = std::move(rows);
 
@@ -216,7 +219,7 @@ bool ParquetDocument::queryPage(const QString &whereClause, qsizetype limit, qsi
     return true;
 }
 
-bool ParquetDocument::runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<QString>> *rows, QString *errorMessage)
+bool ParquetDocument::runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<CellString>> *rows, QString *errorMessage)
 {
     QProcess process;
     process.setProgram(duckdbExecutable());
@@ -266,7 +269,7 @@ bool ParquetDocument::loadSchema(QString *errorMessage)
     const QString sql = QStringLiteral("DESCRIBE SELECT * FROM %1").arg(parquetSourceSql());
 
     QStringList header;
-    QVector<QVector<QString>> rows;
+    QVector<QVector<CellString>> rows;
     if (!runCsvQuery(sql, &header, &rows, errorMessage))
     {
         return false;
@@ -288,8 +291,8 @@ bool ParquetDocument::loadSchema(QString *errorMessage)
     for (const auto &row : rows)
     {
         nextSchema.push_back({
-            row.value(nameIndex),
-            row.value(typeIndex),
+            QString::fromStdString(row.value(nameIndex).toStdString()),
+            QString::fromStdString(row.value(typeIndex).toStdString()),
         });
     }
 

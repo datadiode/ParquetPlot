@@ -7,6 +7,9 @@
 #include <QString>
 #include <QStringList>
 #include <QVector>
+#include "String.hpp"
+
+using CellString = PuqiAR::LibString::String;
 
 struct ColumnInfo
 {
@@ -17,7 +20,7 @@ struct ColumnInfo
 struct QueryPage
 {
     QStringList columns;
-    QVector<QVector<QString>> rows;
+    QVector<QVector<CellString>> rows;
 };
 
 class ParquetDocument final : public QObject
@@ -39,7 +42,7 @@ public:
     bool queryPage(const QString &whereClause, qsizetype limit, qsizetype offset, QueryPage *page, QString *errorMessage);
 
 private:
-    bool runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<QString>> *rows, QString *errorMessage);
+    bool runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<CellString>> *rows, QString *errorMessage);
     bool loadSchema(QString *errorMessage);
     QString parquetSourceSql() const;
     QString duckdbExecutable() const;

@@ -86,23 +86,28 @@ protected:
 
 namespace
 {
-// Formats microseconds
+// Formats microseconds since 1970-01-01 UTC as ISO 8601 with fractional seconds.
+QString isoFromMicroseconds(double value)
+{
+    const double rounded = std::round(value);
+    qint64 seconds = static_cast<qint64>(std::floor(rounded / 1e6));
+    qint64 micros = static_cast<qint64>(rounded - static_cast<double>(seconds) * 1e6);
+    if (micros >= 1000000)
+    {
+        ++seconds;
+        micros -= 1000000;
+    }
+    const QDateTime time = QDateTime::fromSecsSinceEpoch(seconds, QTimeZone::UTC);
+    return time.toString("yyyy-MM-ddTHH:mm:ss") +
+           QString(".%1Z").arg(micros, 6, 10, QChar('0'));
+}
+
 class IsoMicrosecondTicker : public QCPAxisTicker
 {
 protected:
     QString getTickLabel(double tick, const QLocale &, QChar, int) override
     {
-        const double rounded = std::round(tick);
-        qint64 seconds = static_cast<qint64>(std::floor(rounded / 1e6));
-        qint64 micros = static_cast<qint64>(rounded - static_cast<double>(seconds) * 1e6);
-        if (micros >= 1000000)
-        {
-            ++seconds;
-            micros -= 1000000;
-        }
-        const QDateTime time = QDateTime::fromSecsSinceEpoch(seconds, QTimeZone::UTC);
-        return time.toString("yyyy-MM-ddTHH:mm:ss") +
-               QString(".%1Z").arg(micros, 6, 10, QChar('0'));
+        return isoFromMicroseconds(tick);
     }
 };
 }
@@ -175,7 +180,21 @@ void MainWindow::setupUI()
     plot_scroll->setWidgetResizable(true);
     plot_scroll->setFrameShape(QFrame::NoFrame);
     plot_scroll->setWidget(plot);
-    plot_page = plot_scroll;
+    signal_table = new QTableWidget(0, 9, central);
+    signal_table->setObjectName("signalTable");
+    signal_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    signal_table->setHorizontalHeaderLabels({"Name", "Key 1", "Value 1", "Key 2", "Value 2",
+                                             "Key Diff", "Value Diff", "Min Value", "Max Value"});
+    signal_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    signal_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    signal_table->verticalHeader()->setVisible(false);
+    auto *plot_splitter = new QSplitter(Qt::Vertical, central);
+    plot_splitter->addWidget(plot_scroll);
+    plot_splitter->addWidget(signal_table);
+    plot_splitter->setStretchFactor(0, 1);
+    plot_splitter->setStretchFactor(1, 0);
+    plot_splitter->setSizes({700, 160});
+    plot_page = plot_splitter;
     view_stack = new QStackedWidget(central);
     view_stack->addWidget(plot_page);
     table_browser = new TableBrowser(central);
@@ -191,6 +210,7 @@ void MainWindow::setupUI()
     signal_tree->setToolTip("Drag signals or groups onto a plot panel to add them.\n"
                             "Drop .parquet files here to open them.");
     plot->setAcceptDrops(true);
+    plot->setMouseTracking(true);
     auto *splitter = new QSplitter(Qt::Horizontal, central);
     splitter->addWidget(signal_tree);
     splitter->addWidget(view_stack);
@@ -1495,10 +1515,194 @@ void MainWindow::setupPlot(const std::shared_ptr<ParquetData> &data, bool preser
         panel_legends[panel]->setVisible(true);
     }
     updateTargetPlot();
+    if (!preserve_view || data->signal_values.empty())
+        cursors_valid = false;
+    if (!cursors_valid && !data->signal_values.empty() && !data->raw_idx.empty())
+    {
+        const size_t count = std::min(data->raw_idx.size(), data->signal_values.front().size());
+        if (count > 0)
+        {
+            cursor_x[0] = data->raw_idx[0];
+            cursor_x[1] = data->raw_idx[count - 1];
+            cursors_valid = true;
+        }
+    }
+    dragging_cursor = -1;
+    createCursorItems();
+    updateSignalTable();
     fitPanelRanges();
     if (preserve_view)
         synchronizeXRange(previous_x.lower, previous_x.upper);
     plot->replot();
+}
+
+QString MainWindow::formatXValue(double x) const
+{
+    if (x_column_name == QString::fromUtf8(ParquetReader::kMetadataTimeColumn))
+        return isoFromMicroseconds(x);
+    return QString::number(x, 'g', 15);
+}
+
+size_t MainWindow::sampleIndexAt(double x) const
+{
+    const std::vector<double> &xs = current_data->raw_idx;
+    if (xs.empty())
+        return 0;
+    if (std::is_sorted(xs.begin(), xs.end()))
+    {
+        auto it = std::lower_bound(xs.begin(), xs.end(), x);
+        if (it == xs.end())
+            return xs.size() - 1;
+        size_t index = static_cast<size_t>(it - xs.begin());
+        if (index > 0 && std::abs(xs[index - 1] - x) <= std::abs(xs[index] - x))
+            --index;
+        return index;
+    }
+    size_t best = 0;
+    for (size_t i = 1; i < xs.size(); ++i)
+        if (std::abs(xs[i] - x) < std::abs(xs[best] - x))
+            best = i;
+    return best;
+}
+
+void MainWindow::createCursorItems()
+{
+    for (int c = 0; c < 2; ++c)
+    {
+        cursor_lines[c].clear();
+        cursor_labels[c] = nullptr;
+    }
+    if (!cursors_valid)
+        return;
+    const QPen pen(Qt::red, 1.5);
+    for (int c = 0; c < 2; ++c)
+    {
+        for (QCPAxisRect *rect : panel_rects)
+        {
+            auto *line = new QCPItemLine(plot);
+            line->setClipAxisRect(rect);
+            line->setPen(pen);
+            line->setSelectable(false);
+            for (QCPItemPosition *position : {line->start, line->end})
+            {
+                position->setAxisRect(rect);
+                position->setAxes(rect->axis(QCPAxis::atBottom), rect->axis(QCPAxis::atLeft));
+                position->setTypeX(QCPItemPosition::ptPlotCoords);
+                position->setTypeY(QCPItemPosition::ptAxisRectRatio);
+            }
+            cursor_lines[c].append(line);
+        }
+        QCPAxisRect *top = panel_rects.first();
+        auto *label = new QCPItemText(plot);
+        label->setClipAxisRect(top);
+        label->setText(QString("Marker %1").arg(c + 1));
+        label->setColor(Qt::red);
+        label->setSelectable(false);
+        label->setPositionAlignment((c == 0 ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignTop);
+        label->setPadding(QMargins(3, 0, 3, 0));
+        label->position->setAxisRect(top);
+        label->position->setAxes(top->axis(QCPAxis::atBottom), top->axis(QCPAxis::atLeft));
+        label->position->setTypeX(QCPItemPosition::ptPlotCoords);
+        label->position->setTypeY(QCPItemPosition::ptAxisRectRatio);
+        cursor_labels[c] = label;
+    }
+    updateCursorItems();
+}
+
+void MainWindow::updateCursorItems()
+{
+    for (int c = 0; c < 2; ++c)
+    {
+        for (QCPItemLine *line : cursor_lines[c])
+        {
+            line->start->setCoords(cursor_x[c], 0.0);
+            line->end->setCoords(cursor_x[c], 1.0);
+        }
+        if (cursor_labels[c])
+            cursor_labels[c]->position->setCoords(cursor_x[c], 0.0);
+    }
+}
+
+int MainWindow::cursorAt(QPoint pos) const
+{
+    if (!cursors_valid)
+        return -1;
+    QCPAxisRect *rect = panelAt(pos);
+    if (!rect)
+        return -1;
+    QCPAxis *x_axis = rect->axis(QCPAxis::atBottom);
+    int best = -1;
+    double best_distance = 6.0;
+    for (int c = 0; c < 2; ++c)
+    {
+        const double distance = std::abs(x_axis->coordToPixel(cursor_x[c]) - pos.x());
+        if (distance <= best_distance)
+        {
+            best = c;
+            best_distance = distance;
+        }
+    }
+    return best;
+}
+
+void MainWindow::updateSignalTable()
+{
+    signal_table->setRowCount(0);
+    if (!current_data)
+        return;
+    const std::vector<double> &x = current_data->raw_idx;
+    const int signal_count = static_cast<int>(current_data->signal_values.size());
+    signal_table->setRowCount(signal_count);
+    for (int i = 0; i < signal_count; ++i)
+    {
+        const std::vector<double> &values = current_data->signal_values[i];
+        const size_t count = std::min(values.size(), x.size());
+        const PlotSeriesSettings settings = signal_settings.value(i);
+        auto scaled = [&](double v) { return v * settings.multiplier + settings.offset; };
+        auto number = [](double v) { return QString::number(v, 'f', 6); };
+
+        QStringList cells(9);
+        cells[0] = signal_column_names.value(i, QString("Signal %1").arg(i + 1));
+        if (count > 0)
+        {
+            double minimum = std::numeric_limits<double>::infinity();
+            double maximum = -std::numeric_limits<double>::infinity();
+            for (size_t j = 0; j < count; ++j)
+            {
+                const double v = scaled(values[j]);
+                if (std::isfinite(v))
+                {
+                    minimum = std::min(minimum, v);
+                    maximum = std::max(maximum, v);
+                }
+            }
+            const size_t first = cursors_valid ? std::min(sampleIndexAt(cursor_x[0]), count - 1) : 0;
+            const size_t last = cursors_valid ? std::min(sampleIndexAt(cursor_x[1]), count - 1) : count - 1;
+            cells[1] = formatXValue(x[first]);
+            cells[2] = number(scaled(values[first]));
+            cells[3] = formatXValue(x[last]);
+            cells[4] = number(scaled(values[last]));
+            const double key_diff = x[last] - x[first];
+            cells[5] = x_column_name == QString::fromUtf8(ParquetReader::kMetadataTimeColumn)
+                           ? QString("%1 µs").arg(QString::number(key_diff, 'f', 3))
+                           : QString::number(key_diff, 'g', 15);
+            cells[6] = number(scaled(values[last]) - scaled(values[first]));
+            if (std::isfinite(minimum))
+            {
+                cells[7] = number(minimum);
+                cells[8] = number(maximum);
+            }
+        }
+        for (int c = 0; c < cells.size(); ++c)
+        {
+            auto *item = new QTableWidgetItem(cells[c]);
+            if (c == 0)
+                item->setForeground(plotColor(false, i));
+            else
+                item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            signal_table->setItem(i, c, item);
+        }
+    }
 }
 
 QColor MainWindow::automaticPlotColor(int series_index) const
@@ -1885,6 +2089,10 @@ void MainWindow::handleMousePress(QMouseEvent *event)
         return;
     active_panel = clicked_panel;
 
+    dragging_cursor = cursorAt(event->pos());
+    if (dragging_cursor != -1)
+        return;
+
     if (current_mode == InteractionMode::BoxZoom)
     {
         drag_start = event->pos();
@@ -1924,6 +2132,18 @@ void MainWindow::handleMousePress(QMouseEvent *event)
 
 void MainWindow::handleMouseMove(QMouseEvent *event)
 {
+    if (dragging_cursor != -1)
+    {
+        const size_t index = sampleIndexAt(plot->xAxis->pixelToCoord(event->pos().x()));
+        cursor_x[dragging_cursor] = current_data->raw_idx[index];
+        updateCursorItems();
+        updateSignalTable();
+        plot->replot(QCustomPlot::rpQueuedReplot);
+        return;
+    }
+    if (event->buttons() == Qt::NoButton)
+        plot->setCursor(cursorAt(event->pos()) != -1 ? Qt::SizeHorCursor : Qt::ArrowCursor);
+
     if (current_mode == InteractionMode::Normal && view_dragging)
     {
         int dx = event->pos().x() - view_drag_start.x();
@@ -1960,6 +2180,11 @@ void MainWindow::handleMouseMove(QMouseEvent *event)
 
 void MainWindow::handleMouseRelease(QMouseEvent *event)
 {
+    if (dragging_cursor != -1)
+    {
+        dragging_cursor = -1;
+        return;
+    }
     if (current_mode == InteractionMode::Normal && view_dragging)
     {
         view_dragging = false;

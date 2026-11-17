@@ -31,6 +31,7 @@ class QToolBar;
 class QAction;
 class TableBrowser;
 class QTreeWidget;
+class QTableWidget;
 
 struct PlotPanelSettings
 {
@@ -120,6 +121,18 @@ private slots:
 private:
     QCustomPlot *plot;
     QTreeWidget *signal_tree = nullptr;
+    QTableWidget *signal_table = nullptr;
+    double cursor_x[2] = {0.0, 0.0};
+    bool cursors_valid = false;
+    int dragging_cursor = -1;
+    QList<QCPItemLine *> cursor_lines[2];
+    QCPItemText *cursor_labels[2] = {nullptr, nullptr};
+    void createCursorItems();
+    void updateCursorItems();
+    int cursorAt(QPoint pos) const;
+    size_t sampleIndexAt(double x) const;
+    void updateSignalTable();
+    QString formatXValue(double x) const;
     void populateSignalTree(const std::vector<std::string> &column_names);
     void addSignalsToPlot(const QStringList &names, int panel);
     void openDroppedParquetFile(const QString &filename);
