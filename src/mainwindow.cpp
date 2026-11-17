@@ -189,11 +189,16 @@ void MainWindow::setupUI()
     signal_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     signal_table->verticalHeader()->setVisible(false);
     auto *plot_splitter = new QSplitter(Qt::Vertical, central);
+    plot_splitter->setHandleWidth(10);
     plot_splitter->addWidget(plot_scroll);
     plot_splitter->addWidget(signal_table);
     plot_splitter->setStretchFactor(0, 1);
     plot_splitter->setStretchFactor(1, 0);
     plot_splitter->setSizes({700, 160});
+    plot_splitter_handle = plot_splitter->handle(1);
+    plot_splitter_handle->setAcceptDrops(true);
+    plot_splitter_handle->setToolTip("Drop signals here to show them in a new plot panel");
+    plot_splitter_handle->installEventFilter(this);
     plot_page = plot_splitter;
     view_stack = new QStackedWidget(central);
     view_stack->addWidget(plot_page);
@@ -1326,7 +1331,11 @@ void MainWindow::openDroppedParquetFile(const QString &filename)
 
 void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
 {
+    const bool new_panel = panel < 0;
+    if (new_panel)
+        panel = static_cast<int>(panel_settings.size());
     QStringList new_signals = signal_column_names;
+    const qsizetype previous_signal_count = signal_column_names.size();
     QList<PlotSeriesSettings> new_settings = signal_settings;
     while (new_settings.size() < new_signals.size())
         new_settings.append(PlotSeriesSettings{});
@@ -1355,6 +1364,19 @@ void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
                                                                 signal_names, target_names);
         signal_column_names = new_signals;
         signal_settings = new_settings;
+        const QString label = names.size() == 1 ? names.first().section('|', -1) : QString("Values");
+        if (new_panel)
+        {
+            PlotPanelSettings settings;
+            settings.label = label;
+            panel_settings.append(settings);
+        }
+        else if (panel < panel_settings.size() &&
+                 std::none_of(signal_settings.begin(), signal_settings.begin() + previous_signal_count,
+                              [panel](const PlotSeriesSettings &s) { return s.panel == panel; }))
+        {
+            panel_settings[panel].label = label;
+        }
         current_data = std::move(data);
         setupPlot(current_data, true);
     }
@@ -1415,6 +1437,7 @@ void MainWindow::setupPanels()
         }
         QCPAxisRect *rect = panel_rects[i];
         const PlotPanelSettings &settings = panel_settings[i];
+        rect->insetLayout()->setMargins(QMargins(0, 0, 0, 0));
         rect->setMarginGroup(QCP::msLeft | QCP::msRight, panel_margin_group);
         rect->setMinimumSize(0, 130);
         rect->setRangeZoomAxes(rect->axis(QCPAxis::atBottom), rect->axis(QCPAxis::atLeft));
@@ -1434,9 +1457,10 @@ void MainWindow::setupPanels()
             y_axis->setTicker(QSharedPointer<QCPAxisTicker>::create());
         y_axis->setRange(settings.logarithmic ? 0.1 : 0.0, settings.logarithmic ? 10.0 : 1.0);
         panel_legends[i]->setVisible(false);
+        panel_legends[i]->setLayer(QStringLiteral("legend"));
         panel_legends[i]->setFont(QFont(font().family(), 9));
         panel_legends[i]->setBorderPen(QPen(Qt::black));
-        panel_legends[i]->setBrush(QBrush(Qt::white));
+        panel_legends[i]->setBrush(QBrush(QColor(255, 255, 255, 200)));
         plot->plotLayout()->setRowStretchFactor(i, settings.height);
     }
     plot->setMinimumHeight(std::max(300, 180 * static_cast<int>(panel_settings.size())));
@@ -1934,6 +1958,23 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             drop->acceptProposedAction();
             if (event->type() == QEvent::Drop)
                 openDroppedParquetFile(parquet_path);
+            return true;
+        }
+    }
+    if (obj == plot_splitter_handle &&
+        (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove ||
+         event->type() == QEvent::Drop))
+    {
+        auto *drop = static_cast<QDropEvent *>(event);
+        if (current_data && drop->mimeData()->hasFormat(kSignalMimeType))
+        {
+            drop->acceptProposedAction();
+            if (event->type() == QEvent::Drop)
+            {
+                const QStringList names = QString::fromUtf8(drop->mimeData()->data(kSignalMimeType))
+                                              .split('\n', Qt::SkipEmptyParts);
+                addSignalsToPlot(names, -1);
+            }
             return true;
         }
     }

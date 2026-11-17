@@ -122,6 +122,7 @@ private:
     QCustomPlot *plot;
     QTreeWidget *signal_tree = nullptr;
     QTableWidget *signal_table = nullptr;
+    QWidget *plot_splitter_handle = nullptr;
     double cursor_x[2] = {0.0, 0.0};
     bool cursors_valid = false;
     int dragging_cursor = -1;
