@@ -46,6 +46,7 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QDrag>
 #include <functional>
 #include <QDateTime>
 #include <QTimeZone>
@@ -54,6 +55,7 @@
 namespace
 {
 const char *const kSignalMimeType = "application/x-parquetplot-signals";
+const char *const kLegendMimeType = "application/x-parquetplot-legend-signal";
 
 // Tree whose drag payload is the newline-separated list of full column names
 // of all selected leaves (selecting a group selects all signals beneath it).
@@ -1329,6 +1331,47 @@ void MainWindow::openDroppedParquetFile(const QString &filename)
     }
 }
 
+int MainWindow::signalAtLegend(QPoint pos) const
+{
+    if (!current_data)
+        return -1;
+    const int signal_count = static_cast<int>(current_data->signal_values.size());
+    for (QCPLegend *legend : panel_legends)
+    {
+        if (!legend->visible() || !legend->outerRect().contains(pos))
+            continue;
+        for (int i = 0; i < legend->itemCount(); ++i)
+        {
+            auto *item = qobject_cast<QCPPlottableLegendItem *>(legend->item(i));
+            if (!item || !item->outerRect().contains(pos))
+                continue;
+            for (int g = 0; g < signal_count && g < plot->graphCount(); ++g)
+                if (plot->graph(g) == item->plottable())
+                    return g;
+        }
+    }
+    return -1;
+}
+
+void MainWindow::moveSignalToPanel(int signal_index, int panel)
+{
+    if (signal_index < 0 || signal_index >= signal_column_names.size())
+        return;
+    while (signal_settings.size() < signal_column_names.size())
+        signal_settings.append(PlotSeriesSettings{});
+    if (panel < 0)
+    {
+        PlotPanelSettings settings;
+        settings.label = signal_column_names[signal_index].section('|', -1);
+        panel_settings.append(settings);
+        panel = static_cast<int>(panel_settings.size()) - 1;
+    }
+    if (signal_settings[signal_index].panel == panel)
+        return;
+    signal_settings[signal_index].panel = panel;
+    setupPlot(current_data, true);
+}
+
 void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
 {
     const bool new_panel = panel < 0;
@@ -1966,6 +2009,13 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
          event->type() == QEvent::Drop))
     {
         auto *drop = static_cast<QDropEvent *>(event);
+        if (current_data && drop->mimeData()->hasFormat(kLegendMimeType))
+        {
+            drop->acceptProposedAction();
+            if (event->type() == QEvent::Drop)
+                moveSignalToPanel(drop->mimeData()->data(kLegendMimeType).toInt(), -1);
+            return true;
+        }
         if (current_data && drop->mimeData()->hasFormat(kSignalMimeType))
         {
             drop->acceptProposedAction();
@@ -2003,7 +2053,8 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         else if (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)
         {
             auto *drag = static_cast<QDropEvent *>(event);
-            if (current_data && drag->mimeData()->hasFormat(kSignalMimeType))
+            if (current_data && (drag->mimeData()->hasFormat(kSignalMimeType) ||
+                                 drag->mimeData()->hasFormat(kLegendMimeType)))
             {
                 drag->acceptProposedAction();
                 return true;
@@ -2012,6 +2063,16 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         else if (event->type() == QEvent::Drop)
         {
             auto *drop = static_cast<QDropEvent *>(event);
+            if (current_data && drop->mimeData()->hasFormat(kLegendMimeType))
+            {
+                if (QCPAxisRect *rect = panelAt(drop->position().toPoint()))
+                {
+                    drop->acceptProposedAction();
+                    moveSignalToPanel(drop->mimeData()->data(kLegendMimeType).toInt(),
+                                      panel_rects.indexOf(rect));
+                }
+                return true;
+            }
             if (current_data && drop->mimeData()->hasFormat(kSignalMimeType))
             {
                 const QStringList names = QString::fromUtf8(drop->mimeData()->data(kSignalMimeType))
@@ -2130,6 +2191,13 @@ void MainWindow::handleMousePress(QMouseEvent *event)
         return;
     active_panel = clicked_panel;
 
+    legend_drag_signal = signalAtLegend(event->pos());
+    if (legend_drag_signal != -1)
+    {
+        legend_drag_start = event->pos();
+        return;
+    }
+
     dragging_cursor = cursorAt(event->pos());
     if (dragging_cursor != -1)
         return;
@@ -2173,6 +2241,22 @@ void MainWindow::handleMousePress(QMouseEvent *event)
 
 void MainWindow::handleMouseMove(QMouseEvent *event)
 {
+    if (legend_drag_signal != -1)
+    {
+        if ((event->buttons() & Qt::LeftButton) &&
+            (event->pos() - legend_drag_start).manhattanLength() >= QApplication::startDragDistance())
+        {
+            const int signal_index = legend_drag_signal;
+            legend_drag_signal = -1;
+            auto *mime = new QMimeData;
+            mime->setData(kLegendMimeType, QByteArray::number(signal_index));
+            mime->setText(signal_column_names.value(signal_index));
+            auto *drag = new QDrag(plot);
+            drag->setMimeData(mime);
+            drag->exec(Qt::MoveAction);
+        }
+        return;
+    }
     if (dragging_cursor != -1)
     {
         const size_t index = sampleIndexAt(plot->xAxis->pixelToCoord(event->pos().x()));
@@ -2221,6 +2305,11 @@ void MainWindow::handleMouseMove(QMouseEvent *event)
 
 void MainWindow::handleMouseRelease(QMouseEvent *event)
 {
+    if (legend_drag_signal != -1)
+    {
+        legend_drag_signal = -1;
+        return;
+    }
     if (dragging_cursor != -1)
     {
         dragging_cursor = -1;

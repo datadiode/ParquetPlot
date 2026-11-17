@@ -123,6 +123,10 @@ private:
     QTreeWidget *signal_tree = nullptr;
     QTableWidget *signal_table = nullptr;
     QWidget *plot_splitter_handle = nullptr;
+    int legend_drag_signal = -1;
+    QPoint legend_drag_start;
+    int signalAtLegend(QPoint pos) const;
+    void moveSignalToPanel(int signal_index, int panel);
     double cursor_x[2] = {0.0, 0.0};
     bool cursors_valid = false;
     int dragging_cursor = -1;
