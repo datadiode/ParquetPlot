@@ -127,6 +127,7 @@ private:
     QPoint legend_drag_start;
     int signalAtLegend(QPoint pos) const;
     void moveSignalToPanel(int signal_index, int panel);
+    void removeSignalFromPlot(int signal_index);
     double cursor_x[2] = {0.0, 0.0};
     bool cursors_valid = false;
     int dragging_cursor = -1;

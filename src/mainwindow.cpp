@@ -181,6 +181,7 @@ void MainWindow::setupUI()
     auto *plot_scroll = new QScrollArea(central);
     plot_scroll->setWidgetResizable(true);
     plot_scroll->setFrameShape(QFrame::NoFrame);
+    plot_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     plot_scroll->setWidget(plot);
     signal_table = new QTableWidget(0, 9, central);
     signal_table->setObjectName("signalTable");
@@ -190,6 +191,7 @@ void MainWindow::setupUI()
     signal_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     signal_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     signal_table->verticalHeader()->setVisible(false);
+    signal_table->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     auto *plot_splitter = new QSplitter(Qt::Vertical, central);
     plot_splitter->setHandleWidth(10);
     plot_splitter->addWidget(plot_scroll);
@@ -1372,6 +1374,19 @@ void MainWindow::moveSignalToPanel(int signal_index, int panel)
     setupPlot(current_data, true);
 }
 
+void MainWindow::removeSignalFromPlot(int signal_index)
+{
+    if (!current_data || signal_index < 0 ||
+        signal_index >= static_cast<int>(current_data->signal_values.size()))
+        return;
+    current_data->signal_values.erase(current_data->signal_values.begin() + signal_index);
+    if (signal_index < signal_column_names.size())
+        signal_column_names.removeAt(signal_index);
+    if (signal_index < signal_settings.size())
+        signal_settings.removeAt(signal_index);
+    setupPlot(current_data, true);
+}
+
 void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
 {
     const bool new_panel = panel < 0;
@@ -2171,6 +2186,17 @@ void MainWindow::handleMousePress(QMouseEvent *event)
 {
     if (event->button() == Qt::RightButton)
     {
+        const int legend_signal = signalAtLegend(event->pos());
+        if (legend_signal != -1)
+        {
+            QMenu menu(this);
+            QAction *remove = menu.addAction(
+                QString("Remove \"%1\"").arg(signal_column_names.value(legend_signal)));
+            if (menu.exec(plot->mapToGlobal(event->pos())) == remove)
+                removeSignalFromPlot(legend_signal);
+            return;
+        }
+
         int marker_id = findMarkerAt(event->pos());
         if (marker_id != -1)
             deleteMarker(marker_id);
