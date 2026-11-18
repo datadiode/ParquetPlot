@@ -40,7 +40,7 @@ TableBrowser::TableBrowser(QWidget *parent)
 
     fileModel_ = new QFileSystemModel(this);
     fileModel_->setRootPath(QDir::homePath());
-    fileModel_->setNameFilters({QStringLiteral("*.parquet"), QStringLiteral("*.parq")});
+    fileModel_->setNameFilters({QStringLiteral("*.parquet"), QStringLiteral("*.parq"), QStringLiteral("*.parquet.gz")});
     fileModel_->setNameFilterDisables(false);
 
     fileTree_ = new QTreeView(explorer);
@@ -100,7 +100,7 @@ void TableBrowser::openFile()
         this,
         tr("Open Parquet files"),
         QDir::homePath(),
-        tr("Parquet files (*.parquet *.parq);;All files (*)"));
+        tr("Parquet files (*.parquet *.parq *.parquet.gz);;All files (*)"));
     openFiles(paths);
 }
 

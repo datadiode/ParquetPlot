@@ -42,63 +42,20 @@ namespace
         return type.compare(QStringLiteral("BOOLEAN"), Qt::CaseInsensitive) == 0 || type.compare(QStringLiteral("BOOL"), Qt::CaseInsensitive) == 0;
     }
 
-    bool parseBoolean(const QString &value, QString *sql)
+    bool parseBoolean(const QString &value, double *number)
     {
         const QString normalized = value.trimmed().toLower();
         if (normalized == QStringLiteral("true") || normalized == QStringLiteral("1") || normalized == QStringLiteral("yes"))
         {
-            *sql = QStringLiteral("TRUE");
+            *number = 1.0;
             return true;
         }
         if (normalized == QStringLiteral("false") || normalized == QStringLiteral("0") || normalized == QStringLiteral("no"))
         {
-            *sql = QStringLiteral("FALSE");
+            *number = 0.0;
             return true;
         }
         return false;
-    }
-
-    QString escapeLikePattern(QString value)
-    {
-        value.replace('\\', QStringLiteral("\\\\"));
-        value.replace('%', QStringLiteral("\\%"));
-        value.replace('_', QStringLiteral("\\_"));
-        value.replace('\'', QStringLiteral("''"));
-        return value;
-    }
-
-    QString literalForValue(const QString &type, const QString &rawValue, QString *errorMessage)
-    {
-        const QString trimmed = rawValue.trimmed();
-        if (trimmed.compare(QStringLiteral("null"), Qt::CaseInsensitive) == 0)
-        {
-            return QStringLiteral("NULL");
-        }
-
-        QString booleanSql;
-        if (isBooleanType(type))
-        {
-            if (parseBoolean(trimmed, &booleanSql))
-            {
-                return booleanSql;
-            }
-            *errorMessage = QObject::tr("Expected a boolean value like true, false, 1, or 0.");
-            return {};
-        }
-
-        if (isNumericType(type))
-        {
-            bool ok = false;
-            trimmed.toDouble(&ok);
-            if (!ok)
-            {
-                *errorMessage = QObject::tr("Expected a numeric value.");
-                return {};
-            }
-            return trimmed;
-        }
-
-        return quoteSqlString(rawValue);
     }
 
     QString unquoteQuickValue(QString value)
@@ -325,7 +282,7 @@ bool FileTab::showFromRow(qsizetype row)
 bool FileTab::reload()
 {
     QString error;
-    const QString whereClause = buildWhereClause(&error);
+    const RowFilter filter = buildFilter(&error);
     if (!error.isEmpty())
     {
         statusLabel_->setText(error);
@@ -333,7 +290,7 @@ bool FileTab::reload()
     }
 
     qsizetype filteredRows = 0;
-    if (!document_->rowCount(whereClause, &filteredRows, &error))
+    if (!document_->rowCount(filter, &filteredRows, &error))
     {
         statusLabel_->setText(error);
         return false;
@@ -342,7 +299,7 @@ bool FileTab::reload()
     offset_ = std::clamp<qsizetype>(offset_, 0, std::max<qsizetype>(0, filteredRows - 1));
     QueryPage page;
     const qsizetype limit = pageSize_->value();
-    if (!document_->queryPage(whereClause, limit, limit < 0 ? 0 : offset_, &page, &error))
+    if (!document_->queryPage(filter, limit, limit < 0 ? 0 : offset_, &page, &error))
     {
         statusLabel_->setText(error);
         return false;
@@ -404,136 +361,133 @@ void FileTab::updatePageControls(qsizetype filteredRows)
                               .arg(filePath_));
 }
 
-QString FileTab::buildWhereClause(QString *errorMessage) const
+RowFilter FileTab::buildFilter(QString *errorMessage) const
 {
-    QStringList clauses;
+    RowFilter filter;
 
-    const QString searchClause = searchToSql(errorMessage);
+    const QVector<RowCondition> search = searchToFilter(errorMessage);
     if (!errorMessage->isEmpty())
     {
         return {};
     }
-    if (!searchClause.isEmpty())
+    if (!search.isEmpty())
     {
-        clauses.push_back(QStringLiteral("(%1)").arg(searchClause));
+        filter.clauses.push_back(search);
     }
 
     for (const auto &condition : filterBuilder_->conditions())
     {
-        const QString clause = conditionToSql(condition, errorMessage);
-        if (!errorMessage->isEmpty())
+        RowCondition rowCondition;
+        if (!conditionToFilter(condition, &rowCondition, errorMessage))
         {
             return {};
         }
-        if (!clause.isEmpty())
-        {
-            clauses.push_back(QStringLiteral("(%1)").arg(clause));
-        }
+        filter.clauses.push_back({rowCondition});
     }
 
-    return clauses.join(QStringLiteral(" AND "));
+    return filter;
 }
 
-QString FileTab::conditionToSql(const FilterCondition &condition, QString *errorMessage) const
+bool FileTab::conditionToFilter(const FilterCondition &condition, RowCondition *out, QString *errorMessage) const
 {
-    const QString identifier = quoteSqlIdentifier(condition.column);
     const QString type = columnType(condition.column);
     const QString op = condition.op;
+    out->column = condition.column;
 
-    if (op == QStringLiteral("is true"))
+    if (op == QStringLiteral("is true") || op == QStringLiteral("is false"))
     {
-        return QStringLiteral("%1 = TRUE").arg(identifier);
-    }
-    if (op == QStringLiteral("is false"))
-    {
-        return QStringLiteral("%1 = FALSE").arg(identifier);
+        out->op = RowCondition::Op::Equals;
+        out->numeric = true;
+        out->number = op == QStringLiteral("is true") ? 1.0 : 0.0;
+        out->text = op == QStringLiteral("is true") ? QStringLiteral("true") : QStringLiteral("false");
+        return true;
     }
     if (op == QStringLiteral("is empty"))
     {
-        return QStringLiteral("(%1 IS NULL OR CAST(%1 AS VARCHAR) = '')").arg(identifier);
+        out->op = RowCondition::Op::IsEmpty;
+        return true;
     }
     if (op == QStringLiteral("is not empty"))
     {
-        return QStringLiteral("(%1 IS NOT NULL AND CAST(%1 AS VARCHAR) <> '')").arg(identifier);
+        out->op = RowCondition::Op::IsNotEmpty;
+        return true;
     }
 
     if (condition.value.trimmed().isEmpty())
     {
         *errorMessage = tr("A filter value is empty.");
-        return {};
+        return false;
     }
 
     if (op == QStringLiteral("contains text") || op == QStringLiteral("starts with") || op == QStringLiteral("ends with"))
     {
-        QString pattern = escapeLikePattern(condition.value);
-        if (op == QStringLiteral("contains text"))
-        {
-            pattern = QStringLiteral("%") + pattern + QStringLiteral("%");
-        }
-        else if (op == QStringLiteral("starts with"))
-        {
-            pattern = pattern + QStringLiteral("%");
-        }
-        else
-        {
-            pattern = QStringLiteral("%") + pattern;
-        }
-        return QStringLiteral("CAST(%1 AS VARCHAR) ILIKE '%2' ESCAPE '\\'").arg(identifier, pattern);
+        out->op = op == QStringLiteral("contains text") ? RowCondition::Op::Contains
+                  : op == QStringLiteral("starts with") ? RowCondition::Op::StartsWith
+                                                         : RowCondition::Op::EndsWith;
+        out->text = condition.value;
+        return true;
     }
 
-    const QString literal = literalForValue(type, condition.value, errorMessage);
-    if (!errorMessage->isEmpty())
+    static const QHash<QString, RowCondition::Op> comparisons = {
+        {QStringLiteral("equals"), RowCondition::Op::Equals},
+        {QStringLiteral("does not equal"), RowCondition::Op::NotEquals},
+        {QStringLiteral("greater than"), RowCondition::Op::Greater},
+        {QStringLiteral("less than"), RowCondition::Op::Less},
+        {QStringLiteral("at least"), RowCondition::Op::AtLeast},
+        {QStringLiteral("at most"), RowCondition::Op::AtMost},
+    };
+    if (!comparisons.contains(op))
     {
-        return {};
+        *errorMessage = tr("Unknown filter operator: %1").arg(op);
+        return false;
     }
+    out->op = comparisons.value(op);
 
-    if (literal == QStringLiteral("NULL"))
+    const QString trimmed = condition.value.trimmed();
+    if (trimmed.compare(QStringLiteral("null"), Qt::CaseInsensitive) == 0)
     {
-        if (op == QStringLiteral("equals"))
+        if (out->op == RowCondition::Op::Equals)
         {
-            return QStringLiteral("%1 IS NULL").arg(identifier);
+            out->op = RowCondition::Op::IsNull;
+            return true;
         }
-        if (op == QStringLiteral("does not equal"))
+        if (out->op == RowCondition::Op::NotEquals)
         {
-            return QStringLiteral("%1 IS NOT NULL").arg(identifier);
+            out->op = RowCondition::Op::IsNotNull;
+            return true;
         }
         *errorMessage = tr("Only equals / does not equal can be used with NULL.");
-        return {};
+        return false;
     }
 
-    if (op == QStringLiteral("equals"))
+    out->text = condition.value;
+    if (isBooleanType(type))
     {
-        return QStringLiteral("%1 = %2").arg(identifier, literal);
+        if (!parseBoolean(trimmed, &out->number))
+        {
+            *errorMessage = tr("Expected a boolean value like true, false, 1, or 0.");
+            return false;
+        }
+        out->numeric = true;
     }
-    if (op == QStringLiteral("does not equal"))
+    else if (isNumericType(type))
     {
-        return QStringLiteral("%1 <> %2").arg(identifier, literal);
+        bool ok = false;
+        out->number = trimmed.toDouble(&ok);
+        if (!ok)
+        {
+            *errorMessage = tr("Expected a numeric value.");
+            return false;
+        }
+        out->numeric = true;
     }
-    if (op == QStringLiteral("greater than"))
-    {
-        return QStringLiteral("%1 > %2").arg(identifier, literal);
-    }
-    if (op == QStringLiteral("less than"))
-    {
-        return QStringLiteral("%1 < %2").arg(identifier, literal);
-    }
-    if (op == QStringLiteral("at least"))
-    {
-        return QStringLiteral("%1 >= %2").arg(identifier, literal);
-    }
-    if (op == QStringLiteral("at most"))
-    {
-        return QStringLiteral("%1 <= %2").arg(identifier, literal);
-    }
-
-    *errorMessage = tr("Unknown filter operator: %1").arg(op);
-    return {};
+    return true;
 }
 
-QString FileTab::searchToSql(QString *errorMessage) const
+QVector<RowCondition> FileTab::searchToFilter(QString *errorMessage) const
 {
     const QString value = searchBox_->text().trimmed();
-    if (value.trimmed().isEmpty())
+    if (value.isEmpty())
     {
         return {};
     }
@@ -541,25 +495,18 @@ QString FileTab::searchToSql(QString *errorMessage) const
     FilterCondition quickFilter;
     if (tryParseQuickFilter(value, document_->columnNames(), &quickFilter))
     {
-        return conditionToSql(quickFilter, errorMessage);
+        RowCondition condition;
+        if (!conditionToFilter(quickFilter, &condition, errorMessage))
+            return {};
+        return {condition};
     }
 
-    QStringList clauses;
-    for (const QString &column : document_->columnNames())
-    {
-        const QString identifier = quoteSqlIdentifier(column);
-        if (searchMode_->currentText() == tr("exact"))
-        {
-            clauses.push_back(QStringLiteral("CAST(%1 AS VARCHAR) = %2").arg(identifier, quoteSqlString(value)));
-        }
-        else
-        {
-            const QString pattern = QStringLiteral("%") + escapeLikePattern(value) + QStringLiteral("%");
-            clauses.push_back(QStringLiteral("CAST(%1 AS VARCHAR) ILIKE '%2' ESCAPE '\\'").arg(identifier, pattern));
-        }
-    }
-
-    return clauses.join(QStringLiteral(" OR "));
+    // An empty column name matches if any column satisfies the condition.
+    RowCondition condition;
+    condition.op = searchMode_->currentText() == tr("exact") ? RowCondition::Op::TextEquals
+                                                              : RowCondition::Op::Contains;
+    condition.text = value;
+    return {condition};
 }
 
 QString FileTab::columnType(const QString &column) const

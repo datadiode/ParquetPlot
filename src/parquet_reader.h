@@ -9,6 +9,11 @@
 #include <memory>
 #include <cstdint>
 
+namespace arrow
+{
+class Table;
+}
+
 struct ParquetData
 {
     std::vector<double> raw_idx;
@@ -31,6 +36,8 @@ public:
     static constexpr const char *kMetadataTimeColumn = "<metadata time [us]>";
     static bool hasMetadataTime(const std::string &filename);
     static std::vector<std::string> columnNames(const std::string &filename);
+    // Reads the complete table; transparently inflates gzip-compressed files.
+    static std::shared_ptr<arrow::Table> readTable(const std::string &filename);
     static std::unique_ptr<ParquetData> read(const std::string &filename,
                                              const std::string &x_column,
                                              const std::vector<std::string> &signal_columns,

@@ -7,7 +7,17 @@
 #include <QString>
 #include <QStringList>
 #include <QVector>
+#include "FilterCondition.h"
 #include "String.hpp"
+
+#include <cstdint>
+#include <memory>
+
+namespace arrow
+{
+class Array;
+class Table;
+}
 
 using CellString = PuqiAR::LibString::String;
 
@@ -38,18 +48,18 @@ public:
     QVector<ColumnInfo> schema() const;
     QStringList columnNames() const;
 
-    bool rowCount(const QString &whereClause, qsizetype *count, QString *errorMessage);
-    bool queryPage(const QString &whereClause, qsizetype limit, qsizetype offset, QueryPage *page, QString *errorMessage);
+    bool rowCount(const RowFilter &filter, qsizetype *count, QString *errorMessage);
+    bool queryPage(const RowFilter &filter, qsizetype limit, qsizetype offset, QueryPage *page, QString *errorMessage);
 
 private:
-    bool runCsvQuery(const QString &sql, QStringList *header, QVector<QVector<CellString>> *rows, QString *errorMessage);
-    bool loadSchema(QString *errorMessage);
-    QString parquetSourceSql() const;
-    QString duckdbExecutable() const;
+    static bool matches(const RowCondition &condition, const arrow::Array &array, int64_t index);
+    bool applyFilter(const RowFilter &filter, QString *errorMessage);
 
     QString filePath_;
     QVector<ColumnInfo> schema_;
+    std::shared_ptr<arrow::Table> table_;
+    QString cachedFilterKey_;
+    QVector<int64_t> cachedRows_;
+    bool filtered_ = false;
+    bool cacheValid_ = false;
 };
-
-QString quoteSqlString(const QString &value);
-QString quoteSqlIdentifier(const QString &identifier);

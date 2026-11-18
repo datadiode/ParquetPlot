@@ -371,6 +371,12 @@ bool ParquetReader::hasMetadataTime(const std::string &filename)
     return find_metadata_time(*reader, filename).has_value();
 }
 
+std::shared_ptr<arrow::Table> ParquetReader::readTable(const std::string &filename)
+{
+    auto reader = open_reader(filename);
+    return read_table(*reader, "Failed to read table: ");
+}
+
 std::vector<std::string> ParquetReader::columnNames(const std::string &filename)
 {
     auto reader = open_reader(filename);

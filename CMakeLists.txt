@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(ParquetPlot LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -10,16 +10,41 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport REQUIRED)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>/lib")
+foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
+    string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
+endforeach()
+
+find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport Concurrent REQUIRED)
 # Arrow probes optional CMake configs before falling back to pkg-config.
 # Keep those probes quiet; REQUIRED still reports genuinely missing dependencies.
-find_package(Arrow CONFIG REQUIRED QUIET)
-find_package(Parquet CONFIG REQUIRED QUIET)
-message(STATUS "Found Arrow ${ARROW_VERSION} and Parquet ${PARQUET_VERSION}")
-find_program(DUCKDB_EXECUTABLE duckdb)
-if(NOT DUCKDB_EXECUTABLE)
-    message(FATAL_ERROR "DuckDB CLI is required for table browsing. Install duckdb or set -DDUCKDB_EXECUTABLE=/path/to/duckdb.")
-endif()
+
+include(cmake/CPM.cmake)
+
+CPMAddPackage(NAME doctest GITHUB_REPOSITORY datadiode/doctest VERSION 2.5.0-38-g4ffef1a-datadiode)
+
+CPMAddPackage(
+    NAME ApacheArrow
+    GITHUB_REPOSITORY apache/arrow
+    GIT_TAG apache-arrow-26.0.0
+    SOURCE_SUBDIR "./cpp" # this is relative to the top directoy of the cloned repository
+    OPTIONS "ARROW_DEFINE_OPTIONS ON"
+            "ARROW_SIMD_LEVEL SSE4_2"
+            "ARROW_RUNTIME_SIMD_LEVEL AVX2"
+            "ARROW_PARQUET ON"
+            "ARROW_MIMALLOC OFF"
+            "ARROW_BOOST_USE_SHARED OFF"
+            "ARROW_BUILD_SHARED OFF"
+            "ARROW_BUILD_INTEGRATION OFF"
+            "ARROW_BUILD_TESTS OFF"
+            "ARROW_TESTING OFF"
+            "ARROW_BUILD_BENCHMARKS OFF"
+)
 
 add_library(parquetplot_table STATIC
     src/table/TableBrowser.cpp src/table/TableBrowser.h
@@ -27,10 +52,14 @@ add_library(parquetplot_table STATIC
     src/table/FilterBuilderWidget.cpp src/table/FilterBuilderWidget.h
     src/table/FilterCondition.h
     src/table/ParquetDocument.cpp src/table/ParquetDocument.h
-    src/table/ParquetTableModel.cpp src/table/ParquetTableModel.h)
-target_link_libraries(parquetplot_table PUBLIC Qt6::Widgets)
-target_compile_definitions(parquetplot_table PRIVATE
-    DUCKDB_EXECUTABLE="${DUCKDB_EXECUTABLE}")
+    src/table/ParquetTableModel.cpp src/table/ParquetTableModel.h
+    src/parquet_reader.cpp src/parquet_reader.h)
+target_include_directories(parquetplot_table PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${arrow_SOURCE_DIR}/src
+    ${arrow_BINARY_DIR}/src)
+target_link_libraries(parquetplot_table PUBLIC Qt6::Widgets Qt6::Concurrent
+    arrow_static parquet_static)
 
 # QCustomPlot is not consistently packaged by Linux distributions and is not
 # normally present on Windows. Download a pinned, checksum-verified source
@@ -86,9 +115,7 @@ endif()
 add_executable(${PROJECT_NAME} WIN32
     src/main.cpp
     src/mainwindow.cpp
-    src/mainwindow.h
-    src/parquet_reader.cpp
-    src/parquet_reader.h)
+    src/mainwindow.h)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     parquetplot_table
@@ -96,11 +123,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::PrintSupport
-    Arrow::arrow_shared
-    Parquet::parquet_shared
+    arrow_static
+    parquet_static
+    ${ARROW_TARGETS}
     ${QCUSTOMPLOT_TARGET})
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${arrow_SOURCE_DIR}/src
+    ${arrow_BINARY_DIR}/src)
 
 option(PARQUETPLOT_BUILD_TESTS "Build plot interaction tests" OFF)
 if(PARQUETPLOT_BUILD_TESTS)
@@ -108,13 +139,12 @@ if(PARQUETPLOT_BUILD_TESTS)
     find_package(Qt6 COMPONENTS Test REQUIRED)
     add_executable(parquetplot_tests
         tests/mainwindow_test.cpp
-        src/mainwindow.cpp src/mainwindow.h
-        src/parquet_reader.cpp src/parquet_reader.h)
+        src/mainwindow.cpp src/mainwindow.h)
     target_include_directories(parquetplot_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(parquetplot_tests PRIVATE
         parquetplot_table
         Qt6::Test Qt6::Widgets Qt6::PrintSupport
-        Arrow::arrow_shared Parquet::parquet_shared ${QCUSTOMPLOT_TARGET})
+        arrow_static parquet_static ${QCUSTOMPLOT_TARGET})
     add_test(NAME plot_panels COMMAND parquetplot_tests)
     set(PARQUETPLOT_TEST_PLATFORM "offscreen" CACHE STRING
         "Qt platform plugin for interaction tests (use xcb with xvfb-run on Linux)")
@@ -125,9 +155,7 @@ endif()
 
 include(GNUInstallDirs)
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS "${DUCKDB_EXECUTABLE}" DESTINATION ${CMAKE_INSTALL_BINDIR}
-        RENAME "duckdb${CMAKE_EXECUTABLE_SUFFIX}")
-install(FILES resources/io.github.selimct.ParquetPlot.desktop
+install(FILES
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES resources/io.github.selimct.ParquetPlot-mime.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)

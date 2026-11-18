@@ -37,9 +37,9 @@ private:
     void previousPage();
     void nextPage();
     void updatePageControls(qsizetype filteredRows);
-    QString buildWhereClause(QString *errorMessage) const;
-    QString conditionToSql(const FilterCondition &condition, QString *errorMessage) const;
-    QString searchToSql(QString *errorMessage) const;
+    RowFilter buildFilter(QString *errorMessage) const;
+    bool conditionToFilter(const FilterCondition &condition, RowCondition *out, QString *errorMessage) const;
+    QVector<RowCondition> searchToFilter(QString *errorMessage) const;
     QString columnType(const QString &column) const;
 
     QString filePath_;
