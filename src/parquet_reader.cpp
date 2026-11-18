@@ -318,6 +318,7 @@ struct MetadataTime
     double delta;
 };
 
+#ifdef METADATA_SIDECAR_FALLBACK
 static std::optional<MetadataTime> parse_metadata_time(const QByteArray &json)
 {
     QJsonParseError error{};
@@ -336,6 +337,7 @@ static std::optional<MetadataTime> parse_metadata_time(const QByteArray &json)
         start = root.value("Time").toDouble();
     return MetadataTime{start, clk.toDouble()};
 }
+#endif
 
 static std::optional<MetadataTime> find_metadata_time(parquet::arrow::FileReader &reader,
                                                       const std::string &filename)
@@ -343,17 +345,25 @@ static std::optional<MetadataTime> find_metadata_time(parquet::arrow::FileReader
     const auto metadata = reader.parquet_reader()->metadata();
     if (metadata)
     {
+        MetadataTime result{};
         if (const auto kv = metadata->key_value_metadata())
         {
+            size_t haveStart = 0;
+            size_t haveDelta = 0;
             for (int64_t i = 0; i < kv->size(); ++i)
             {
+                const std::string &key = kv->key(i);
                 const std::string &value = kv->value(i);
-                if (auto result = parse_metadata_time(QByteArray(value.data(), static_cast<qsizetype>(value.size()))))
+                if (key == "timestamp/Time")
+                    result.start = std::stod(value, &haveStart);
+                else if (key == "clkInUs")
+                    result.delta = std::stod(value, &haveDelta);
+                if (haveStart && haveDelta)
                     return result;
             }
         }
     }
-
+#ifdef METADATA_SIDECAR_FALLBACK
     const QFileInfo info(QString::fromStdString(filename));
     QString base = info.fileName();
     for (const char *suffix : {".gz", ".parquet", ".parq"})
@@ -362,7 +372,41 @@ static std::optional<MetadataTime> find_metadata_time(parquet::arrow::FileReader
     QFile sidecar(info.dir().filePath(base + ".metadata"));
     if (sidecar.open(QIODevice::ReadOnly))
         return parse_metadata_time(sidecar.readAll());
+#endif
     return std::nullopt;
+}
+
+std::vector<std::pair<std::string, std::string>> ParquetReader::keyValueMetadata(const std::string &filename)
+{
+    std::vector<std::pair<std::string, std::string>> result;
+    auto reader = open_reader(filename);
+    if (const auto metadata = reader->parquet_reader()->metadata())
+    {
+        if (const auto kv = metadata->key_value_metadata())
+        {
+            for (int64_t i = 0; i < kv->size(); ++i)
+            {
+                if (!kv->key(i).starts_with('[') &&
+                    !kv->key(i).starts_with("ARROW:") &&
+                    !kv->key(i).starts_with("Module_name_") &&
+                    kv->key(i) != "bin")
+                {
+                    result.emplace_back(kv->key(i), kv->value(i));
+                }
+            }
+        }
+    }
+#ifdef METADATA_SIDECAR_FALLBACK
+    const QFileInfo info(QString::fromStdString(filename));
+    QString base = info.fileName();
+    for (const char *suffix : {".gz", ".parquet", ".parq"})
+        if (base.endsWith(suffix, Qt::CaseInsensitive))
+            base.chop(static_cast<int>(std::strlen(suffix)));
+    QFile sidecar(info.dir().filePath(base + ".metadata"));
+    if (sidecar.open(QIODevice::ReadOnly))
+        result.emplace_back("<sidecar>", sidecar.readAll().toStdString());
+#endif
+    return result;
 }
 
 bool ParquetReader::hasMetadataTime(const std::string &filename)

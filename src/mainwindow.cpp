@@ -1264,6 +1264,77 @@ void MainWindow::selectColumnsForFile(const QString &filename, bool preserve_vie
 void MainWindow::populateSignalTree(const std::vector<std::string> &column_names)
 {
     signal_tree->clear();
+    try
+    {
+        const auto metadata = ParquetReader::keyValueMetadata(current_file_path.toStdString());
+        if (!metadata.empty())
+        {
+            auto *root = new QTreeWidgetItem(signal_tree);
+            root->setText(0, "Metadata");
+            std::function<void(QTreeWidgetItem *, const QString &, const QJsonValue &)> addJson =
+                [&](QTreeWidgetItem *parent, const QString &key, const QJsonValue &value)
+            {
+                auto *item = new QTreeWidgetItem(parent);
+                if (value.isObject())
+                {
+                    item->setText(0, key);
+                    const QJsonObject object = value.toObject();
+                    for (auto it = object.begin(); it != object.end(); ++it)
+                        addJson(item, it.key(), it.value());
+                }
+                else if (value.isArray())
+                {
+                    item->setText(0, key);
+                    const QJsonArray array = value.toArray();
+                    for (qsizetype i = 0; i < array.size(); ++i)
+                        addJson(item, QString("[%1]").arg(i), array.at(i));
+                }
+                else
+                {
+                    const QString text = value.isString() ? value.toString()
+                                         : value.isBool() ? (value.toBool() ? "true" : "false")
+                                         : value.isDouble() ? QString::number(value.toDouble(), 'g', 17)
+                                                            : QString("null");
+                    item->setText(0, QString("%1: %2").arg(key, text));
+                    item->setToolTip(0, text);
+                }
+            };
+            for (const auto &[key, value] : metadata)
+            {
+                const QStringList parts = QString::fromStdString(key).split('/', Qt::SkipEmptyParts);
+                if (parts.isEmpty())
+                    continue;
+                QTreeWidgetItem *parent = root;
+                for (qsizetype i = 0; i < parts.size() - 1; ++i)
+                {
+                    QTreeWidgetItem *found = nullptr;
+                    for (int c = 0; c < parent->childCount() && !found; ++c)
+                        if (parent->child(c)->text(0) == parts[i])
+                            found = parent->child(c);
+                    if (!found)
+                    {
+                        found = new QTreeWidgetItem(parent);
+                        found->setText(0, parts[i]);
+                    }
+                    parent = found;
+                }
+                const QString name = parts.last();
+                const QByteArray bytes = QByteArray::fromStdString(value);
+                QJsonParseError error{};
+                const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
+                if (error.error == QJsonParseError::NoError && document.isObject())
+                    addJson(parent, name, document.object());
+                else if (error.error == QJsonParseError::NoError && document.isArray())
+                    addJson(parent, name, document.array());
+                else
+                    addJson(parent, name, QString::fromUtf8(bytes));
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        qWarning() << "Error reading metadata:" << e.what();
+    }
     for (const std::string &column : column_names)
     {
         const QString name = QString::fromStdString(column);

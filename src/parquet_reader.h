@@ -8,6 +8,7 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <utility>
 
 namespace arrow
 {
@@ -35,6 +36,9 @@ public:
     // metadata entries (embedded key-value metadata or a .metadata sidecar file).
     static constexpr const char *kMetadataTimeColumn = "<metadata time [us]>";
     static bool hasMetadataTime(const std::string &filename);
+    // Returns the file's key-value metadata, followed by the content of a .metadata
+    // sidecar file (if any) under the key "<sidecar>".
+    static std::vector<std::pair<std::string, std::string>> keyValueMetadata(const std::string &filename);
     static std::vector<std::string> columnNames(const std::string &filename);
     // Reads the complete table; transparently inflates gzip-compressed files.
     static std::shared_ptr<arrow::Table> readTable(const std::string &filename);
