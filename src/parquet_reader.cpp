@@ -6,6 +6,9 @@
 #include <parquet/arrow/writer.h>
 #include <parquet/properties.h>
 #include <arrow/io/file.h>
+#include <arrow/io/compressed.h>
+#include <arrow/io/memory.h>
+#include <arrow/util/compression.h>
 #include <arrow/array.h>
 #include <arrow/array/util.h>
 #include <arrow/buffer.h>
@@ -25,15 +28,67 @@
 #include <map>
 #include <stdexcept>
 
-static std::unique_ptr<parquet::arrow::FileReader> open_reader(const std::string &filename)
+static bool is_gzip_file(const std::string &filename)
+{
+    return QString::fromStdString(filename).endsWith(".gz", Qt::CaseInsensitive);
+}
+
+// Parquet needs random access, so a gzip-compressed file is inflated through
+// arrow::io::CompressedInputStream into memory and served via a BufferReader.
+static std::shared_ptr<arrow::io::RandomAccessFile> open_input(const std::string &filename)
 {
     auto infile_result = arrow::io::ReadableFile::Open(filename);
     if (!infile_result.ok())
     {
         throw std::runtime_error("Failed to open file: " + infile_result.status().ToString());
     }
+    std::shared_ptr<arrow::io::ReadableFile> infile = infile_result.ValueOrDie();
+    if (!is_gzip_file(filename))
+        return infile;
 
-    auto reader_result = parquet::arrow::OpenFile(infile_result.ValueOrDie(), arrow::default_memory_pool());
+    auto codec_result = arrow::util::Codec::Create(arrow::Compression::GZIP);
+    if (!codec_result.ok())
+        throw std::runtime_error("GZIP codec unavailable: " + codec_result.status().ToString());
+    std::shared_ptr<arrow::util::Codec> codec = std::move(codec_result).ValueOrDie();
+
+    auto stream_result = arrow::io::CompressedInputStream::Make(codec.get(), infile);
+    if (!stream_result.ok())
+        throw std::runtime_error("Failed to open gzip stream: " + stream_result.status().ToString());
+    std::shared_ptr<arrow::io::CompressedInputStream> stream = stream_result.ValueOrDie();
+
+    std::vector<std::shared_ptr<arrow::Buffer>> chunks;
+    int64_t total = 0;
+    constexpr int64_t chunk_size = 16 << 20;
+    for (;;)
+    {
+        auto chunk_result = stream->Read(chunk_size);
+        if (!chunk_result.ok())
+            throw std::runtime_error("Failed to decompress file: " + chunk_result.status().ToString());
+        std::shared_ptr<arrow::Buffer> chunk = chunk_result.ValueOrDie();
+        if (chunk->size() == 0)
+            break;
+        total += chunk->size();
+        chunks.push_back(std::move(chunk));
+    }
+    (void)stream->Close();
+
+    auto buffer_result = arrow::AllocateBuffer(total);
+    if (!buffer_result.ok())
+        throw std::runtime_error("Failed to allocate decompression buffer: " +
+                                 buffer_result.status().ToString());
+    std::shared_ptr<arrow::Buffer> buffer(std::move(buffer_result).ValueOrDie());
+    uint8_t *out = buffer->mutable_data();
+    for (const auto &chunk : chunks)
+    {
+        std::memcpy(out, chunk->data(), static_cast<size_t>(chunk->size()));
+        out += chunk->size();
+    }
+    return std::make_shared<arrow::io::BufferReader>(std::move(buffer));
+}
+
+static std::unique_ptr<parquet::arrow::FileReader> open_reader(const std::string &filename)
+{
+    auto reader_result = parquet::arrow::OpenFile(open_input(filename), arrow::default_memory_pool());
     if (!reader_result.ok())
     {
         throw std::runtime_error("Failed to open parquet file: " + reader_result.status().ToString());
@@ -300,7 +355,11 @@ static std::optional<MetadataTime> find_metadata_time(parquet::arrow::FileReader
     }
 
     const QFileInfo info(QString::fromStdString(filename));
-    QFile sidecar(info.dir().filePath(info.completeBaseName() + ".metadata"));
+    QString base = info.fileName();
+    for (const char *suffix : {".gz", ".parquet", ".parq"})
+        if (base.endsWith(suffix, Qt::CaseInsensitive))
+            base.chop(static_cast<int>(std::strlen(suffix)));
+    QFile sidecar(info.dir().filePath(base + ".metadata"));
     if (sidecar.open(QIODevice::ReadOnly))
         return parse_metadata_time(sidecar.readAll());
     return std::nullopt;

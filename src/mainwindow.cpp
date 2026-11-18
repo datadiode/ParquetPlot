@@ -702,7 +702,7 @@ void MainWindow::openFile()
     QSettings settings;
     QString last_directory = settings.value("files/lastParquetDirectory", QDir::homePath()).toString();
 
-    QString filename = QFileDialog::getOpenFileName(this, "Open Parquet File", last_directory, "Parquet Files (*.parquet)");
+    QString filename = QFileDialog::getOpenFileName(this, "Open Parquet File", last_directory, "Parquet Files (*.parquet *.parquet.gz)");
     if (filename.isEmpty())
         return;
 
@@ -2004,7 +2004,8 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             for (const QUrl &url : drop->mimeData()->urls())
             {
                 if (url.isLocalFile() &&
-                    url.toLocalFile().endsWith(".parquet", Qt::CaseInsensitive))
+                    (url.toLocalFile().endsWith(".parquet", Qt::CaseInsensitive) ||
+                                         url.toLocalFile().endsWith(".parquet.gz", Qt::CaseInsensitive)))
                 {
                     parquet_path = url.toLocalFile();
                     break;
