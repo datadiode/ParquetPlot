@@ -24,7 +24,12 @@ TableBrowser::TableBrowser(QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     auto *splitter = new QSplitter(this);
+    tabs_ = new QTabWidget(splitter);
+    tabs_->setTabsClosable(true);
+    tabs_->setMovable(true);
+    connect(tabs_, &QTabWidget::tabCloseRequested, this, &TableBrowser::closeTab);
 
+#ifdef WANT_EXPLORER
     auto *explorer = new QWidget(splitter);
     auto *explorerLayout = new QVBoxLayout(explorer);
     explorerLayout->setContentsMargins(0, 0, 0, 0);
@@ -56,20 +61,9 @@ TableBrowser::TableBrowser(QWidget *parent)
     connect(fileTree_, &QTreeView::doubleClicked, this, &TableBrowser::handleTreeActivated);
     explorerLayout->addWidget(fileTree_, 1);
 
-    tabs_ = new QTabWidget(splitter);
-    tabs_->setTabsClosable(true);
-    tabs_->setMovable(true);
-    connect(tabs_, &QTabWidget::tabCloseRequested, this, &TableBrowser::closeTab);
-
     splitter->addWidget(explorer);
-    splitter->addWidget(tabs_);
-    splitter->setStretchFactor(0, 0);
-    splitter->setStretchFactor(1, 1);
-    splitter->setSizes({260, 1020});
-
     auto *mainToolbar = new QToolBar(this);
     layout->addWidget(mainToolbar);
-    layout->addWidget(splitter, 1);
     mainToolbar->setIconSize({18, 18});
     mainToolbar->addAction(openFileAction);
     mainToolbar->addAction(openFolderAction);
@@ -77,13 +71,20 @@ TableBrowser::TableBrowser(QWidget *parent)
     plotAction->setObjectName("plotTableFile");
     connect(plotAction, &QAction::triggered, this, [this]()
     {
-        auto *tab = qobject_cast<FileTab *>(tabs_->currentWidget());
+        auto *tab = qobject_cast<FileTab*>(tabs_->currentWidget());
         if (tab)
             emit plotRequested(tab->filePath());
     });
     plotAction->setEnabled(false);
     connect(tabs_, &QTabWidget::currentChanged, this, [plotAction](int index)
     { plotAction->setEnabled(index >= 0); });
+#endif
+
+    splitter->addWidget(tabs_);
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    splitter->setSizes({260, 1020});
+    layout->addWidget(splitter, 1);
 }
 
 void TableBrowser::openFiles(const QStringList &paths)
@@ -104,6 +105,7 @@ void TableBrowser::openFile()
     openFiles(paths);
 }
 
+#ifdef WANT_EXPLORER
 void TableBrowser::openDirectory()
 {
     const QString path = QFileDialog::getExistingDirectory(this, tr("Open folder"), QDir::homePath());
@@ -114,6 +116,7 @@ void TableBrowser::openDirectory()
 
     fileTree_->setRootIndex(fileModel_->index(path));
 }
+#endif
 
 FileTab *TableBrowser::openFilePath(const QString &path)
 {
@@ -148,6 +151,7 @@ FileTab *TableBrowser::openFilePath(const QString &path)
     return tab;
 }
 
+#ifdef WANT_EXPLORER
 void TableBrowser::handleTreeActivated(const QModelIndex &index)
 {
     if (!index.isValid())
@@ -161,6 +165,7 @@ void TableBrowser::handleTreeActivated(const QModelIndex &index)
         openFilePath(path);
     }
 }
+#endif
 
 void TableBrowser::closeTab(int index)
 {

@@ -127,6 +127,10 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle("Data Plotting Tool");
     setGeometry(100, 100, 1400, 900);
 
+    QSettings settings;
+    restoreGeometry(settings.value("MainWindow/geometry").toByteArray());
+    restoreState(settings.value("MainWindow/windowState").toByteArray());
+
     for (int i = 0; i < 4; ++i)
     {
         selection_rect[i] = nullptr;
@@ -146,20 +150,6 @@ void MainWindow::setupUI()
     setCentralWidget(central);
 
     QVBoxLayout *main_layout = new QVBoxLayout(central);
-
-    QHBoxLayout *button_layout = new QHBoxLayout();
-    QPushButton *open_btn = new QPushButton("Open Parquet File");
-    connect(open_btn, &QPushButton::clicked, this, &MainWindow::openFile);
-    button_layout->addWidget(open_btn);
-
-    select_columns_btn = new QPushButton("Select Columns");
-    select_columns_btn->setToolTip("Change the signals and targets plotted from the current file");
-    select_columns_btn->setEnabled(false);
-    connect(select_columns_btn, &QPushButton::clicked, this, &MainWindow::reopenColumnDialog);
-    button_layout->addWidget(select_columns_btn);
-
-    button_layout->addStretch();
-    main_layout->addLayout(button_layout);
 
     plot = new QCustomPlot();
     plot->setInteraction(QCP::iRangeDrag, true);
@@ -242,6 +232,17 @@ void MainWindow::setupToolbar()
 {
     QToolBar *view_toolbar = addToolBar("Views");
     view_toolbar->setObjectName("viewToolbar");
+
+    QPushButton* open_btn = new QPushButton("Open Parquet File");
+    connect(open_btn, &QPushButton::clicked, this, &MainWindow::openFile);
+    view_toolbar->addWidget(open_btn);
+
+    select_columns_btn = new QPushButton("Select Columns");
+    select_columns_btn->setToolTip("Change the signals and targets plotted from the current file");
+    select_columns_btn->setEnabled(false);
+    connect(select_columns_btn, &QPushButton::clicked, this, &MainWindow::reopenColumnDialog);
+    view_toolbar->addWidget(select_columns_btn);
+
     plot_action = view_toolbar->addAction("Plot", this, &MainWindow::showPlot);
     plot_action->setObjectName("showPlot");
     plot_action->setCheckable(true);
@@ -249,8 +250,8 @@ void MainWindow::setupToolbar()
     table_action = new QAction("Table", this);
     table_action->setObjectName("showTable");
     table_action->setCheckable(true);
-    table_action->setToolTip("Show the table starting at the current plot X position");
-    connect(table_action, &QAction::triggered, this, [this]() { showTable(true); });
+    table_action->setToolTip("Show the table");
+    connect(table_action, &QAction::triggered, this, [this]() { showTable(false); });
     auto *table_menu = new QMenu(view_toolbar);
     auto *from_plot = table_menu->addAction("From current plot X", this, [this]() { showTable(true); });
     from_plot->setObjectName("tableFromPlot");
@@ -775,7 +776,7 @@ void MainWindow::showTable(bool from_current_x)
     select_columns_btn->setEnabled(false);
     for (QAction *action : plot_shortcuts)
         action->setEnabled(false);
-    if (tab)
+    if (tab && from_current_x)
         tab->showFromRow(row);
 }
 
@@ -788,7 +789,7 @@ void MainWindow::openParquetFile(const QString &filename)
     QSettings settings;
     settings.setValue("files/lastParquetDirectory", QFileInfo(absolute_filename).absolutePath());
 
-    selectColumnsForFile(absolute_filename, false);
+    openDroppedParquetFile(absolute_filename);
 }
 
 void MainWindow::openTableFiles(const QStringList &filenames)
@@ -2060,6 +2061,14 @@ void MainWindow::refreshFalsePositiveMarkerPositions()
         if (point_idx != -1)
             updateMarkerPosition(marker_id, target_curve, point_idx);
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    QSettings settings;
+    settings.setValue("MainWindow/geometry", saveGeometry());
+    settings.setValue("MainWindow/windowState", saveState());
+    QMainWindow::closeEvent(event);
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)

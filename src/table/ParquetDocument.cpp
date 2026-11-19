@@ -102,12 +102,9 @@ namespace
         case arrow::Type::BOOL:
             return static_cast<const arrow::BooleanArray &>(array).Value(i) ? "true" : "false";
         case arrow::Type::FLOAT:
+            return std::to_string(static_cast<const arrow::FloatArray&>(array).Value(i));
         case arrow::Type::DOUBLE:
-        {
-            double value = 0.0;
-            numericValue(array, i, &value);
-            return QString::number(value, 'g', array.type_id() == arrow::Type::FLOAT ? 7 : 15).toStdString();
-        }
+            return std::to_string(static_cast<const arrow::DoubleArray&>(array).Value(i));
         case arrow::Type::INT64:
             return std::to_string(static_cast<const arrow::Int64Array &>(array).Value(i));
         case arrow::Type::UINT64:
@@ -171,7 +168,7 @@ namespace
                 key += QStringLiteral("%1\x1f%2\x1f%3\x1f%4\x1f%5\x1e")
                            .arg(c.column)
                            .arg(static_cast<int>(c.op))
-                           .arg(c.text)
+                           .arg(c.text.c_str())
                            .arg(c.numeric ? 1 : 0)
                            .arg(c.number, 0, 'g', 17);
             key += QLatin1Char(')');
@@ -285,7 +282,7 @@ bool ParquetDocument::matches(const RowCondition &condition, const arrow::Array 
         }
     }
 
-    const QString text = QString::fromStdString(cellText(array, i));
+    const std::string text = cellText(array, i);
     switch (condition.op)
     {
     case RowCondition::Op::Equals:
@@ -302,11 +299,11 @@ bool ParquetDocument::matches(const RowCondition &condition, const arrow::Array 
     case RowCondition::Op::AtMost:
         return text <= condition.text;
     case RowCondition::Op::Contains:
-        return text.contains(condition.text, Qt::CaseInsensitive);
+        return text.find(condition.text) != std::string::npos;
     case RowCondition::Op::StartsWith:
-        return text.startsWith(condition.text, Qt::CaseInsensitive);
+        return text.starts_with(condition.text);
     case RowCondition::Op::EndsWith:
-        return text.endsWith(condition.text, Qt::CaseInsensitive);
+        return text.ends_with(condition.text);
     default:
         return false;
     }

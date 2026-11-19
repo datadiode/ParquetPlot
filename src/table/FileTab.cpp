@@ -248,6 +248,11 @@ bool FileTab::load(QString *errorMessage)
         columnTypes_.insert(column.name, column.type);
     }
     filterBuilder_->setColumns(document_->columnNames());
+    if (!reload())
+    {
+        *errorMessage = statusLabel_->text();
+        return false;
+    }
     return true;
 }
 
@@ -399,7 +404,7 @@ bool FileTab::conditionToFilter(const FilterCondition &condition, RowCondition *
         out->op = RowCondition::Op::Equals;
         out->numeric = true;
         out->number = op == QStringLiteral("is true") ? 1.0 : 0.0;
-        out->text = op == QStringLiteral("is true") ? QStringLiteral("true") : QStringLiteral("false");
+        out->text = op == QStringLiteral("is true") ? "true" : "false";
         return true;
     }
     if (op == QStringLiteral("is empty"))
@@ -424,7 +429,7 @@ bool FileTab::conditionToFilter(const FilterCondition &condition, RowCondition *
         out->op = op == QStringLiteral("contains text") ? RowCondition::Op::Contains
                   : op == QStringLiteral("starts with") ? RowCondition::Op::StartsWith
                                                          : RowCondition::Op::EndsWith;
-        out->text = condition.value;
+        out->text = condition.value.toStdString();
         return true;
     }
 
@@ -460,7 +465,7 @@ bool FileTab::conditionToFilter(const FilterCondition &condition, RowCondition *
         return false;
     }
 
-    out->text = condition.value;
+    out->text = condition.value.toStdString();
     if (isBooleanType(type))
     {
         if (!parseBoolean(trimmed, &out->number))
@@ -505,7 +510,7 @@ QVector<RowCondition> FileTab::searchToFilter(QString *errorMessage) const
     RowCondition condition;
     condition.op = searchMode_->currentText() == tr("exact") ? RowCondition::Op::TextEquals
                                                               : RowCondition::Op::Contains;
-    condition.text = value;
+    condition.text = value.toStdString();
     return {condition};
 }
 

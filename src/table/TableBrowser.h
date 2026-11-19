@@ -29,7 +29,9 @@ private:
     void handleTreeActivated(const QModelIndex &index);
     void closeTab(int index);
 
+#ifdef WANT_EXPLORER
     QFileSystemModel *fileModel_ = nullptr;
     QTreeView *fileTree_ = nullptr;
+#endif
     QTabWidget *tabs_ = nullptr;
 };
