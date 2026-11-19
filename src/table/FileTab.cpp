@@ -8,12 +8,14 @@
 
 #include <QComboBox>
 #include <QAbstractItemView>
+#include <QApplication>
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSpinBox>
 #include <QStyle>
 #include <QTableView>
@@ -293,6 +295,9 @@ bool FileTab::reload()
         statusLabel_->setText(error);
         return false;
     }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QScopeGuard restoreOverrideCursor(QApplication::restoreOverrideCursor);
 
     qsizetype filteredRows = 0;
     if (!document_->rowCount(filter, &filteredRows, &error))

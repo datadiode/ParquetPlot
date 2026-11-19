@@ -11,7 +11,9 @@
 #include <arrow/table.h>
 #include <arrow/type.h>
 
+#include <QApplication>
 #include <QFileInfo>
+#include <QScopeGuard>
 
 #include <algorithm>
 #include <exception>
@@ -197,6 +199,9 @@ bool ParquetDocument::open(const QString &filePath, QString *errorMessage)
 
     try
     {
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        QScopeGuard restoreOverrideCursor(QApplication::restoreOverrideCursor);
+
         table_ = ParquetReader::readTable(info.absoluteFilePath().toStdString());
     }
     catch (const std::exception &e)

@@ -38,6 +38,7 @@
 #include <QList>
 #include <QSpinBox>
 #include <QLineEdit>
+#include <QScopeGuard>
 #include <QScrollArea>
 #include <QSplitter>
 #include <QTreeWidget>
@@ -1374,6 +1375,9 @@ void MainWindow::openDroppedParquetFile(const QString &filename)
 {
     try
     {
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        QScopeGuard restoreOverrideCursor(QApplication::restoreOverrideCursor);
+
         const std::string path = filename.toStdString();
         if (!ParquetReader::hasMetadataTime(path))
         {
