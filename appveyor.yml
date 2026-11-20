@@ -1,0 +1,28 @@
+version: '{build}'
+
+image:
+- Visual Studio 2022
+
+configuration:
+- Release
+
+platform:
+- x64
+
+before_build:
+- cmd: cmake . -G "Visual Studio 17 2022" -DCMAKE_PREFIX_PATH=C:/Qt/6.9.3/msvc2022_%PLATFORM:~-2% -A %PLATFORM%
+
+build_script:
+- msbuild ParquetPlot.sln -p:Platform=%PLATFORM% -p:Configuration=%CONFIGURATION%
+- '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=1.0.0 /DAppSourceDir=%APPVEYOR_BUILD_FOLDER%\%CONFIGURATION%\bin packaging\windows\ParquetPlot.iss /O.'
+
+deploy:
+  provider: GitHub
+  tag: $(APPVEYOR_REPO_TAG_NAME)
+  on:
+    APPVEYOR_REPO_TAG: true
+  auth_token:
+    secure: Ff432aLyTjRB02PAo9YoH+iRttges/GD2mpfggEdsZ+oDFoeYYzu3Z52IzsH+E1y
+
+artifacts:
+- path: 'ParquetPlot-Windows-$(platform)-Setup.exe'

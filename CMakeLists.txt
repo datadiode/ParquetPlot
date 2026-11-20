@@ -20,13 +20,11 @@ foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 endforeach()
 
-find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport Concurrent REQUIRED)
+find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport REQUIRED)
 # Arrow probes optional CMake configs before falling back to pkg-config.
 # Keep those probes quiet; REQUIRED still reports genuinely missing dependencies.
 
 include(cmake/CPM.cmake)
-
-CPMAddPackage(NAME doctest GITHUB_REPOSITORY datadiode/doctest VERSION 2.5.0-38-g4ffef1a-datadiode)
 
 CPMAddPackage(
     NAME ApacheArrow
@@ -58,8 +56,7 @@ target_include_directories(parquetplot_table PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${arrow_SOURCE_DIR}/src
     ${arrow_BINARY_DIR}/src)
-target_link_libraries(parquetplot_table PUBLIC Qt6::Widgets Qt6::Concurrent
-    arrow_static parquet_static)
+target_link_libraries(parquetplot_table PUBLIC Qt6::Widgets arrow_static parquet_static)
 
 # QCustomPlot is not consistently packaged by Linux distributions and is not
 # normally present on Windows. Download a pinned, checksum-verified source
@@ -104,11 +101,7 @@ else()
         "${qcustomplot_SOURCE_DIR}/qcustomplot.cpp"
         "${qcustomplot_SOURCE_DIR}/qcustomplot.h")
     target_include_directories(qcustomplot_source PUBLIC "${qcustomplot_SOURCE_DIR}")
-    target_link_libraries(qcustomplot_source PUBLIC
-        Qt6::Core
-        Qt6::Gui
-        Qt6::Widgets
-        Qt6::PrintSupport)
+    target_link_libraries(qcustomplot_source PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport)
     set(QCUSTOMPLOT_TARGET qcustomplot_source)
 endif()
 
@@ -116,6 +109,24 @@ add_executable(${PROJECT_NAME} WIN32
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h)
+
+if(WIN32)
+    add_custom_command(
+        TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND Qt6::windeployqt
+                --no-compiler-runtime
+                --no-network
+                --no-svg
+                --no-translations
+                --no-system-d3d-compiler
+                --no-system-dxc-compiler
+                --no-opengl-sw
+                --no-quick-import
+                --skip-plugin-types iconengines,generic,networkinformation,tls,imageformats
+                --dir "${CMAKE_BINARY_DIR}/$<CONFIG>/bin"
+                $<TARGET_FILE:${PROJECT_NAME}>
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/$<CONFIG>/bin")
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     parquetplot_table
@@ -141,22 +152,14 @@ if(PARQUETPLOT_BUILD_TESTS)
         tests/mainwindow_test.cpp
         src/mainwindow.cpp src/mainwindow.h)
     target_include_directories(parquetplot_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(parquetplot_tests PRIVATE
-        parquetplot_table
-        Qt6::Test Qt6::Widgets Qt6::PrintSupport
-        arrow_static parquet_static ${QCUSTOMPLOT_TARGET})
+    target_link_libraries(parquetplot_tests PRIVATE parquetplot_table Qt6::Test Qt6::Widgets Qt6::PrintSupport arrow_static parquet_static ${QCUSTOMPLOT_TARGET})
     add_test(NAME plot_panels COMMAND parquetplot_tests)
-    set(PARQUETPLOT_TEST_PLATFORM "offscreen" CACHE STRING
-        "Qt platform plugin for interaction tests (use xcb with xvfb-run on Linux)")
-    set_tests_properties(plot_panels PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=${PARQUETPLOT_TEST_PLATFORM}"
-        TIMEOUT 30)
+    set(PARQUETPLOT_TEST_PLATFORM "offscreen" CACHE STRING "Qt platform plugin for interaction tests (use xcb with xvfb-run on Linux)")
+    set_tests_properties(plot_panels PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=${PARQUETPLOT_TEST_PLATFORM}" TIMEOUT 30)
 endif()
 
 include(GNUInstallDirs)
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES resources/io.github.selimct.ParquetPlot-mime.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
 install(FILES resources/io.github.selimct.ParquetPlot.svg
