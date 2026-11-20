@@ -25,6 +25,7 @@ find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport REQUIRED)
 # Keep those probes quiet; REQUIRED still reports genuinely missing dependencies.
 
 include(cmake/CPM.cmake)
+include(cmake/GitVersionDetect.cmake)
 
 CPMAddPackage(
     NAME ApacheArrow
@@ -109,6 +110,8 @@ add_executable(${PROJECT_NAME} WIN32
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE VERSION_STRING="${GITVERSIONDETECT_VERSION}")
 
 if(WIN32)
     add_custom_command(

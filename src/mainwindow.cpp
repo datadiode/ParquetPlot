@@ -373,7 +373,7 @@ void MainWindow::setupToolbar()
     toolbar->addWidget(annotation_toggle);
 
     toolbar->addSeparator();
-    filename_label = new QLabel("File: No file opened");
+    filename_label = new QLabel("Version: " VERSION_STRING);
     filename_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     toolbar->addWidget(filename_label);
 }
