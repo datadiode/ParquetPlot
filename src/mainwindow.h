@@ -32,6 +32,7 @@ class QAction;
 class TableBrowser;
 class QTreeWidget;
 class QTableWidget;
+class SignalTreeWidget;
 
 struct PlotPanelSettings
 {
@@ -121,7 +122,7 @@ private slots:
 
 private:
     QCustomPlot *plot;
-    QTreeWidget *signal_tree = nullptr;
+    SignalTreeWidget *signal_tree = nullptr;
     QTableWidget *signal_table = nullptr;
     QWidget *plot_splitter_handle = nullptr;
     int legend_drag_signal = -1;

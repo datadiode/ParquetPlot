@@ -57,6 +57,7 @@ namespace
 {
 const char *const kSignalMimeType = "application/x-parquetplot-signals";
 const char *const kLegendMimeType = "application/x-parquetplot-legend-signal";
+}
 
 // Tree whose drag payload is the newline-separated list of full column names
 // of all selected leaves (selecting a group selects all signals beneath it).
@@ -64,6 +65,18 @@ class SignalTreeWidget : public QTreeWidget
 {
 public:
     using QTreeWidget::QTreeWidget;
+    QLineEdit *createHeaderEdit()
+    {
+        Q_ASSERT(header_edit == nullptr);
+        header_edit = new QLineEdit(this);
+        header_edit->setPlaceholderText("Signals");
+        warning_action = header_edit->addAction(QIcon::fromTheme(QIcon::ThemeIcon::DialogWarning), QLineEdit::TrailingPosition);
+        warning_action->setVisible(false);
+        header_edit->setClearButtonEnabled(true);
+        header_edit->setFrame(false);
+        connect(header_edit, &QLineEdit::textChanged, this, &SignalTreeWidget::filterChanged);
+        return header_edit;
+    }
 
 protected:
     QMimeData *mimeData(const QList<QTreeWidgetItem *> &items) const override
@@ -84,8 +97,40 @@ protected:
         mime->setText(names.join('\n'));
         return mime;
     }
+    void resizeEvent(QResizeEvent* event)
+    {
+        if (header_edit)
+        {
+            header_edit->setGeometry(0, 0, width(), header()->height());
+        }
+        return QTreeWidget::resizeEvent(event);
+    }
+
+private slots:
+    void filterChanged(const QString &text)
+    {
+        QRegularExpression regex(text, QRegularExpression::CaseInsensitiveOption);
+        warning_action->setVisible(!regex.isValid());
+        QTreeWidgetItemIterator it(this, QTreeWidgetItemIterator::NoChildren);
+        while (QTreeWidgetItem *item = *it)
+        {
+            QString itemText = item->text(0);
+            if (regex.isValid() && regex.match(itemText).hasMatch())
+            {
+                item->setHidden(false);
+            }
+            else
+            {
+                item->setHidden(true);
+            }
+            it++;
+        }
+	}
+
+private:
+    QLineEdit *header_edit = nullptr;
+    QAction *warning_action = nullptr;
 };
-}
 
 namespace
 {
@@ -202,7 +247,8 @@ void MainWindow::setupUI()
     view_stack->addWidget(table_browser);
     signal_tree = new SignalTreeWidget(central);
     signal_tree->setObjectName("signalTree");
-    signal_tree->setHeaderLabel("Signals");
+    signal_tree->setHeaderLabel("");
+    signal_tree->createHeaderEdit();
     signal_tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     signal_tree->setDragEnabled(true);
     signal_tree->setDragDropMode(QAbstractItemView::DragOnly);
