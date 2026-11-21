@@ -1269,6 +1269,7 @@ void MainWindow::selectColumnsForFile(const QString &filename, bool preserve_vie
 void MainWindow::populateSignalTree(const std::vector<std::string> &column_names)
 {
     signal_tree->clear();
+    signal_meas_unit.clear();
     try
     {
         const auto metadata = ParquetReader::keyValueMetadata(current_file_path.toStdString());
@@ -1306,6 +1307,10 @@ void MainWindow::populateSignalTree(const std::vector<std::string> &column_names
             };
             for (const auto &[key, value] : metadata)
             {
+                if (key.ends_with("]unit") && !value.empty())
+                {
+                    signal_meas_unit[QString::fromStdString(key.substr(1, key.size() - 6))] = QString::fromStdString(value);
+                }
                 const QStringList parts = QString::fromStdString(key).split('/', Qt::SkipEmptyParts);
                 if (parts.isEmpty())
                     continue;
@@ -1586,7 +1591,8 @@ void MainWindow::setupPanels()
         else
             x_axis->setTicker(QSharedPointer<QCPAxisTicker>::create());
         QCPAxis *y_axis = rect->axis(QCPAxis::atLeft);
-        y_axis->setLabel(settings.label);
+        if (const auto &assoc = signal_meas_unit.find(signal_column_names[i]); assoc != signal_meas_unit.end())
+            y_axis->setLabel(assoc.value());
         y_axis->setScaleType(settings.logarithmic ? QCPAxis::stLogarithmic : QCPAxis::stLinear);
         if (settings.logarithmic)
             y_axis->setTicker(QSharedPointer<QCPAxisTickerLog>::create());

@@ -29,8 +29,8 @@ include(cmake/GitVersionDetect.cmake)
 
 CPMAddPackage(
     NAME ApacheArrow
-    GITHUB_REPOSITORY apache/arrow
-    GIT_TAG apache-arrow-26.0.0
+    URL https://github.com/apache/arrow/archive/refs/tags/apache-arrow-26.0.1.tar.gz
+    URL_HASH SHA256=1fee09a4b032cd814ad8ce27365499a42d4fd78ab64870045453b3dd0343e64a
     SOURCE_SUBDIR "./cpp" # this is relative to the top directoy of the cloned repository
     OPTIONS "ARROW_DEFINE_OPTIONS ON"
             "ARROW_SIMD_LEVEL SSE4_2"
@@ -89,14 +89,13 @@ if(PARQUETPLOT_USE_SYSTEM_QCUSTOMPLOT)
         set(QCUSTOMPLOT_TARGET qcustomplot_system)
     endif()
 else()
-    include(FetchContent)
     if(POLICY CMP0135)
         cmake_policy(SET CMP0135 NEW)
     endif()
-    FetchContent_Declare(qcustomplot
+    CPMAddPackage(
+        NAME qcustomplot
         URL https://www.qcustomplot.com/release/2.1.1/QCustomPlot.tar.gz
         URL_HASH SHA512=2e49a9b3f7ab03bcd580e5f3c3ae0d5e8c57d3ccce0ceed9862cde7ea23e2f3672a963af988be60e504cb5aa50bc462e4b28acf577eae41cc6fea2802642dc19)
-    FetchContent_MakeAvailable(qcustomplot)
 
     add_library(qcustomplot_source STATIC
         "${qcustomplot_SOURCE_DIR}/qcustomplot.cpp"

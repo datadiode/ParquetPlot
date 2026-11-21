@@ -354,7 +354,7 @@ static std::optional<MetadataTime> find_metadata_time(parquet::arrow::FileReader
             {
                 const std::string &key = kv->key(i);
                 const std::string &value = kv->value(i);
-                if (key == "timestamp/Time")
+                if (key == "starttime")
                     result.start = std::stod(value, &haveStart);
                 else if (key == "clkInUs")
                     result.delta = std::stod(value, &haveDelta);
@@ -386,7 +386,7 @@ std::vector<std::pair<std::string, std::string>> ParquetReader::keyValueMetadata
         {
             for (int64_t i = 0; i < kv->size(); ++i)
             {
-                if (!kv->key(i).starts_with('[') &&
+                if (//!kv->key(i).starts_with('[') &&
                     !kv->key(i).starts_with("ARROW:") &&
                     !kv->key(i).starts_with("Module_name_") &&
                     kv->key(i) != "bin")

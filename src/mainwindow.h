@@ -167,6 +167,7 @@ private:
     QStringList signal_column_names = {"ecg1_raw", "puls_raw"};
     QStringList trigger_column_names = {"target"};
     QMap<QString, QColor> custom_plot_colors;
+    QMap<QString, QString> signal_meas_unit;
     QList<PlotPanelSettings> panel_settings = {PlotPanelSettings{}};
     QList<PlotSeriesSettings> signal_settings;
     QList<PlotSeriesSettings> target_settings;
