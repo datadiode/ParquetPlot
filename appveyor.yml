@@ -14,7 +14,7 @@ before_build:
 
 build_script:
 - msbuild ParquetPlot.sln -p:Platform=%PLATFORM% -p:Configuration=%CONFIGURATION%
-- '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=1.0.0 /DAppSourceDir=%APPVEYOR_BUILD_FOLDER%\%CONFIGURATION%\bin packaging\windows\ParquetPlot.iss /O.'
+- for /f %%v in ('git describe') do "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=%%v /DAppSourceDir=%APPVEYOR_BUILD_FOLDER%\%CONFIGURATION%\bin packaging\windows\ParquetPlot.iss /O.
 
 deploy:
   provider: GitHub

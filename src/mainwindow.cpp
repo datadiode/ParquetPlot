@@ -169,6 +169,7 @@ void MainWindow::setupUI()
             this, [this](const QCPRange &)
             { updateMarkerLabelPositions(); });
     plot->installEventFilter(this);
+    connect(plot, &QCustomPlot::mouseDoubleClick, this, &MainWindow::fitView);
     auto *plot_scroll = new QScrollArea(central);
     plot_scroll->setWidgetResizable(true);
     plot_scroll->setFrameShape(QFrame::NoFrame);
@@ -376,6 +377,8 @@ void MainWindow::setupToolbar()
     filename_label = new QLabel("Version: " VERSION_STRING);
     filename_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     toolbar->addWidget(filename_label);
+
+    setXZoomMode(); // for convenience, start in x zoom mode
 }
 
 void MainWindow::updateModeButtons()
