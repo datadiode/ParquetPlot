@@ -52,6 +52,7 @@
 #include <QDateTime>
 #include <QTimeZone>
 #include <cmath>
+#include <QJSValueIterator>
 
 namespace
 {
@@ -281,7 +282,7 @@ void MainWindow::setupToolbar()
     QToolBar *view_toolbar = addToolBar("Views");
     view_toolbar->setObjectName("viewToolbar");
 
-    QPushButton* open_btn = new QPushButton("Open Parquet File");
+    QPushButton* open_btn = new QPushButton("Open File");
     connect(open_btn, &QPushButton::clicked, this, &MainWindow::openFile);
     view_toolbar->addWidget(open_btn);
 
@@ -753,7 +754,7 @@ void MainWindow::openFile()
     QSettings settings;
     QString last_directory = settings.value("files/lastParquetDirectory", QDir::homePath()).toString();
 
-    QString filename = QFileDialog::getOpenFileName(this, "Open Parquet File", last_directory, "Parquet Files (*.parquet *.parquet.gz)");
+    QString filename = QFileDialog::getOpenFileName(this, "Open File", last_directory, "Parquet Files (*.parquet *.parquet.gz);;Formula Files (*.formula)");
     if (filename.isEmpty())
         return;
 
@@ -839,7 +840,10 @@ void MainWindow::openParquetFile(const QString &filename)
     QSettings settings;
     settings.setValue("files/lastParquetDirectory", QFileInfo(absolute_filename).absolutePath());
 
-    openDroppedParquetFile(absolute_filename);
+    if (filename.endsWith(".parquet") || filename.endsWith(".parquet.gz"))
+        openDroppedParquetFile(filename);
+    else if (filename.endsWith(".formula"))
+        openDroppedFormulaFile(filename);
 }
 
 void MainWindow::openTableFiles(const QStringList &filenames)
@@ -1316,6 +1320,8 @@ void MainWindow::populateSignalTree(const std::vector<std::string> &column_names
 {
     signal_tree->clear();
     signal_meas_unit.clear();
+    formula_signals.clear();
+    js_engine.reset(nullptr);
     try
     {
         const auto metadata = ParquetReader::keyValueMetadata(current_file_path.toStdString());
@@ -1463,6 +1469,67 @@ void MainWindow::openDroppedParquetFile(const QString &filename)
     }
 }
 
+void MainWindow::openDroppedFormulaFile(const QString& path)
+{
+    if (js_engine.isNull())
+        js_engine.reset(new QJSEngine);
+
+    QJSValue value = js_engine->importModule(path);
+    if (value.isError())
+    {
+        QString error_message = QString("Error loading formula module:\n%1\nFile: %2\nLine: %3")
+            .arg(value.property("message").toString())
+            .arg(value.property("fileName").toString())
+            .arg(value.property("lineNumber").toInt());
+        QMessageBox::critical(this, "Load Formula module", error_message);
+        return;
+    }
+    auto *root = new QTreeWidgetItem(signal_tree);
+    root->setText(0, path);
+    QJSValueIterator it(value);
+    while (it.next())
+    {
+        QString name = it.name();
+        auto *item = new QTreeWidgetItem(root);
+        item->setText(0, name);
+        const QString signal_name = path + '|' + name;
+        formula_signals.insert(signal_name, value);
+        item->setData(0, Qt::UserRole, signal_name);
+        item->setToolTip(0, signal_name);
+    }
+}
+
+std::vector<double> MainWindow::evaluateFormulaSignal(const QString &name, size_t row_count)
+{
+    std::vector<double> values(row_count, std::numeric_limits<double>::quiet_NaN());
+    const QString export_name = name.section('|', -1);
+    QJSValue result = formula_signals.value(name).property(export_name);
+    if (result.isCallable())
+        result = result.call();
+    if (result.isError())
+    {
+        throw std::runtime_error(QString("Error evaluating %1:\n%2\nLine: %3")
+                                     .arg(export_name, result.property("message").toString())
+                                     .arg(result.property("lineNumber").toInt())
+                                     .toStdString());
+    }
+    if (result.isArray())
+    {
+        const size_t length = result.property("length").toUInt();
+        for (size_t i = 0; i < length && i < row_count; ++i)
+            values[i] = result.property(static_cast<quint32>(i)).toNumber();
+    }
+    else if (result.isNumber())
+    {
+        std::fill(values.begin(), values.end(), result.toNumber());
+    }
+    else
+    {
+        throw std::runtime_error(QString("%1 does not yield an array or a number").arg(export_name).toStdString());
+    }
+    return values;
+}
+
 int MainWindow::signalAtLegend(QPoint pos) const
 {
     if (!current_data)
@@ -1543,13 +1610,28 @@ void MainWindow::addSignalsToPlot(const QStringList &names, int panel)
     {
         std::vector<std::string> signal_names;
         for (const QString &name : new_signals)
-            signal_names.push_back(name.toStdString());
+            if (!formula_signals.contains(name))
+                signal_names.push_back(name.toStdString());
         std::vector<std::string> target_names;
         for (const QString &name : trigger_column_names)
             target_names.push_back(name.toStdString());
         std::shared_ptr<ParquetData> data = ParquetReader::read(current_file_path.toStdString(),
                                                                 x_column_name.toStdString(),
                                                                 signal_names, target_names);
+        if (!formula_signals.isEmpty())
+        {
+            // Interleave formula results with the columns read from the file.
+            std::vector<std::vector<double>> read_values = std::move(data->signal_values);
+            data->signal_values.clear();
+            size_t next_read = 0;
+            for (const QString &name : new_signals)
+            {
+                if (formula_signals.contains(name))
+                    data->signal_values.push_back(evaluateFormulaSignal(name, data->raw_idx.size()));
+                else
+                    data->signal_values.push_back(std::move(read_values[next_read++]));
+            }
+        }
         signal_column_names = new_signals;
         signal_settings = new_settings;
         const QString label = names.size() == 1 ? names.first().section('|', -1) : QString("Values");
@@ -2137,25 +2219,76 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
          event->type() == QEvent::Drop))
     {
         auto *drop = static_cast<QDropEvent *>(event);
-        QString parquet_path;
+        if (current_data && drop->mimeData()->hasFormat(kLegendMimeType))
+        {
+            // Legend items may be dropped onto variables exported by a formula module.
+            QTreeWidgetItem *item = signal_tree->itemAt(drop->position().toPoint());
+            const QString name = item ? item->data(0, Qt::UserRole).toString() : QString();
+            QJSValue variable;
+            if (formula_signals.contains(name))
+                variable = formula_signals.value(name).property(name.section('|', -1));
+            if (event->type() == QEvent::DragEnter || (variable.isArray() && !variable.isCallable()))
+                drop->acceptProposedAction();
+            else
+                drop->ignore();
+            if (event->type() == QEvent::Drop && drop->isAccepted())
+            {
+                const int signal_index = drop->mimeData()->data(kLegendMimeType).toInt();
+                if (signal_index >= 0 && signal_index < static_cast<int>(current_data->signal_values.size()))
+                {
+                    // Module bindings are read-only from outside, so update the array in place.
+                    const std::vector<double> &values = current_data->signal_values[signal_index];
+                    variable.setProperty("length", 0);
+                    for (size_t i = 0; i < values.size(); ++i)
+                        variable.setProperty(static_cast<quint32>(i), values[i]);
+                    if (signal_index < signal_column_names.size())
+                    {
+                        const QString &signal_name = signal_column_names[signal_index];
+                        item->setText(0, QString("%1 = %2").arg(name.section('|', -1), signal_name.section('|', -1)));
+                        item->setToolTip(0, QString("%1 = %2").arg(name, signal_name));
+                    }
+                }
+            }
+            return true;
+        }
         if (drop->mimeData()->hasUrls())
         {
-            for (const QUrl &url : drop->mimeData()->urls())
+            // Check for Parquet files
+            for (const QUrl& url : drop->mimeData()->urls())
             {
-                if (url.isLocalFile() &&
-                    (url.toLocalFile().endsWith(".parquet", Qt::CaseInsensitive) ||
-                                         url.toLocalFile().endsWith(".parquet.gz", Qt::CaseInsensitive)))
+                if (!url.isLocalFile())
+                    continue;
+                const QString path = url.toLocalFile();
+                if (path.endsWith(".parquet", Qt::CaseInsensitive) ||
+                    path.endsWith(".parquet.gz", Qt::CaseInsensitive))
                 {
-                    parquet_path = url.toLocalFile();
+                    drop->acceptProposedAction();
+                    if (event->type() == QEvent::Drop)
+                    {
+                        openDroppedParquetFile(path);
+                    }
+                    break;
+                }
+            }
+            // Check for formula files
+            for (const QUrl& url : drop->mimeData()->urls())
+            {
+                if (!url.isLocalFile())
+                    continue;
+                const QString path = url.toLocalFile();
+                if (path.endsWith(".formula", Qt::CaseInsensitive))
+                {
+                    drop->acceptProposedAction();
+                    if (event->type() == QEvent::Drop)
+                    {
+                        openDroppedFormulaFile(path);
+                    }
                     break;
                 }
             }
         }
-        if (!parquet_path.isEmpty())
+        if (drop->isAccepted())
         {
-            drop->acceptProposedAction();
-            if (event->type() == QEvent::Drop)
-                openDroppedParquetFile(parquet_path);
             return true;
         }
     }

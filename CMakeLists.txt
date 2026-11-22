@@ -20,7 +20,7 @@ foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG} ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 endforeach()
 
-find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport REQUIRED)
+find_package(Qt6 COMPONENTS Core Gui Widgets PrintSupport Qml REQUIRED)
 # Arrow probes optional CMake configs before falling back to pkg-config.
 # Keep those probes quiet; REQUIRED still reports genuinely missing dependencies.
 
@@ -117,7 +117,6 @@ if(WIN32)
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND Qt6::windeployqt
                 --no-compiler-runtime
-                --no-network
                 --no-svg
                 --no-translations
                 --no-system-d3d-compiler
@@ -136,6 +135,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::PrintSupport
+    Qt6::Qml
     arrow_static
     parquet_static
     ${ARROW_TARGETS}

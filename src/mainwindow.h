@@ -6,6 +6,7 @@
 
 #include <QMainWindow>
 #include <QColor>
+#include <QJSEngine>
 #include <QList>
 #include <memory>
 #include <QMap>
@@ -121,6 +122,10 @@ private slots:
     void deleteMarker(int id);
 
 private:
+    QScopedPointer<QJSEngine> js_engine;
+    // Maps pseudo signal names ("<formula path>|<export>") to the module exporting them.
+    QHash<QString, QJSValue> formula_signals;
+    std::vector<double> evaluateFormulaSignal(const QString &name, size_t row_count);
     QCustomPlot *plot;
     SignalTreeWidget *signal_tree = nullptr;
     QTableWidget *signal_table = nullptr;
@@ -144,6 +149,7 @@ private:
     void populateSignalTree(const std::vector<std::string> &column_names);
     void addSignalsToPlot(const QStringList &names, int panel);
     void openDroppedParquetFile(const QString &filename);
+    void openDroppedFormulaFile(const QString &filename);
     QStackedWidget *view_stack;
     QWidget *plot_page;
     TableBrowser *table_browser;
