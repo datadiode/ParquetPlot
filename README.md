@@ -1,3 +1,11 @@
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
+
+Fork of https://github.com/selimct/ParquetPlot adapted to specific requirements.  
+The original `README.md` as reproduced below does not generally apply to this fork.  
+For the time being, this fork releases just Windows installers.
+
+---
+
 # ParquetPlot
 
 Desktop application for plotting, annotating, and browsing Parquet data on Linux and Windows.

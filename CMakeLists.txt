@@ -110,6 +110,8 @@ add_executable(${PROJECT_NAME} WIN32
     src/mainwindow.cpp
     src/mainwindow.h)
 
+qt_add_resources(${PROJECT_NAME} "resources" FILES "resources/io.github.selimct.ParquetPlot.svg")
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE VERSION_STRING="${GITVERSIONDETECT_VERSION}")
 
 if(WIN32)
@@ -117,13 +119,12 @@ if(WIN32)
         TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND Qt6::windeployqt
                 --no-compiler-runtime
-                --no-svg
                 --no-translations
                 --no-system-d3d-compiler
                 --no-system-dxc-compiler
                 --no-opengl-sw
                 --no-quick-import
-                --skip-plugin-types iconengines,generic,networkinformation,tls,imageformats
+                --skip-plugin-types generic,networkinformation,tls,imageformats,qmltooling
                 --dir "${CMAKE_BINARY_DIR}/$<CONFIG>/bin"
                 $<TARGET_FILE:${PROJECT_NAME}>
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/$<CONFIG>/bin")

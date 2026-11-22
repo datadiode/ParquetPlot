@@ -14,7 +14,7 @@ before_build:
 
 build_script:
 - msbuild ParquetPlot.sln -p:Platform=%PLATFORM% -p:Configuration=%CONFIGURATION%
-- for /f %%v in ('git describe') do "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=%%v /DAppSourceDir=%APPVEYOR_BUILD_FOLDER%\%CONFIGURATION%\bin packaging\windows\ParquetPlot.iss /O.
+- for /f %%v in ('git describe') do "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /FParquetPlot-%%v-Windows-%PLATFORM%-Setup /DAppVersion=%%v /DAppSourceDir=%APPVEYOR_BUILD_FOLDER%\%CONFIGURATION%\bin packaging\windows\ParquetPlot.iss /O.
 
 deploy:
   provider: GitHub
@@ -22,7 +22,7 @@ deploy:
   on:
     APPVEYOR_REPO_TAG: true
   auth_token:
-    secure: Ff432aLyTjRB02PAo9YoH+iRttges/GD2mpfggEdsZ+oDFoeYYzu3Z52IzsH+E1y
+    secure: KoZ7nAgzOu1PExQ0Fdqaj22snLyhuY/YIa24yebq/0u2TXedv24XEHqcGPrjoDtn
 
 artifacts:
-- path: 'ParquetPlot-Windows-$(platform)-Setup.exe'
+- path: 'ParquetPlot-*-Windows-$(platform)-Setup.exe'

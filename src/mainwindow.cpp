@@ -53,6 +53,10 @@
 #include <QTimeZone>
 #include <cmath>
 #include <QJSValueIterator>
+#include <QTableWidget>
+#include <QStackedWidget>
+#include <QMenu>
+#include <algorithm>
 
 namespace
 {
@@ -112,19 +116,15 @@ private slots:
     {
         QRegularExpression regex(text, QRegularExpression::CaseInsensitiveOption);
         warning_action->setVisible(!regex.isValid());
+        if (!regex.isValid())
+            return;
         QTreeWidgetItemIterator it(this, QTreeWidgetItemIterator::NoChildren);
-        while (QTreeWidgetItem *item = *it)
+        while (QTreeWidgetItem *item = *it++)
         {
             QString itemText = item->text(0);
-            if (regex.isValid() && regex.match(itemText).hasMatch())
-            {
-                item->setHidden(false);
-            }
-            else
-            {
-                item->setHidden(true);
-            }
-            it++;
+            if (item->flags() & Qt::ItemNeverHasChildren)
+                continue;
+            item->setHidden(!regex.match(itemText).hasMatch());
         }
 	}
 
@@ -160,17 +160,11 @@ protected:
     }
 };
 }
-#include <QTableWidget>
-#include <QHeaderView>
-#include <QStackedWidget>
-#include <QMenu>
-#include <algorithm>
-#include <cmath>
-#include <limits>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    setWindowIcon(QIcon(":/resources/io.github.selimct.ParquetPlot.svg"));
     setWindowTitle("Data Plotting Tool");
     setGeometry(100, 100, 1400, 900);
 
@@ -224,6 +218,9 @@ void MainWindow::setupUI()
     signal_table = new QTableWidget(0, 9, central);
     signal_table->setObjectName("signalTable");
     signal_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    signal_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    signal_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    signal_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     signal_table->setHorizontalHeaderLabels({"Name", "Key 1", "Value 1", "Key 2", "Value 2",
                                              "Key Diff", "Value Diff", "Min Value", "Max Value"});
     signal_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -282,7 +279,7 @@ void MainWindow::setupToolbar()
     QToolBar *view_toolbar = addToolBar("Views");
     view_toolbar->setObjectName("viewToolbar");
 
-    QPushButton* open_btn = new QPushButton("Open File");
+    QPushButton *open_btn = new QPushButton("Open File");
     connect(open_btn, &QPushButton::clicked, this, &MainWindow::openFile);
     view_toolbar->addWidget(open_btn);
 
@@ -754,7 +751,8 @@ void MainWindow::openFile()
     QSettings settings;
     QString last_directory = settings.value("files/lastParquetDirectory", QDir::homePath()).toString();
 
-    QString filename = QFileDialog::getOpenFileName(this, "Open File", last_directory, "Parquet Files (*.parquet *.parquet.gz);;Formula Files (*.formula)");
+    QString filename = QFileDialog::getOpenFileName(this, "Open File", last_directory,
+        "Supported files (*.parquet *.parquet.gz *.formula);;Parquet files (*.parquet *.parquet.gz);;Formula files (*.formula)");
     if (filename.isEmpty())
         return;
 
@@ -840,10 +838,15 @@ void MainWindow::openParquetFile(const QString &filename)
     QSettings settings;
     settings.setValue("files/lastParquetDirectory", QFileInfo(absolute_filename).absolutePath());
 
-    if (filename.endsWith(".parquet") || filename.endsWith(".parquet.gz"))
+    if (filename.endsWith(".parquet", Qt::CaseInsensitive) ||
+        filename.endsWith(".parquet.gz", Qt::CaseInsensitive))
+    {
         openDroppedParquetFile(filename);
-    else if (filename.endsWith(".formula"))
+    }
+    else if (filename.endsWith(".formula", Qt::CaseInsensitive))
+    {
         openDroppedFormulaFile(filename);
+    }
 }
 
 void MainWindow::openTableFiles(const QStringList &filenames)
@@ -1363,7 +1366,19 @@ void MainWindow::populateSignalTree(const std::vector<std::string> &column_names
                 {
                     signal_meas_unit[QString::fromStdString(key.substr(1, key.size() - 6))] = QString::fromStdString(value);
                 }
-                const QStringList parts = QString::fromStdString(key).split('/', Qt::SkipEmptyParts);
+                const QString key_text = QString::fromStdString(key);
+                const qsizetype bracket = key_text.startsWith('[') ? key_text.indexOf(']') : -1;
+                QStringList parts;
+                if (bracket > 1 && bracket + 1 < key_text.size())
+                {
+                    // "[Group|Signal]suffix" is organized by the pipe-delimited signal name.
+                    parts = key_text.mid(1, bracket - 1).split('|', Qt::SkipEmptyParts);
+                    parts.append(key_text.mid(bracket + 1));
+                }
+                else
+                {
+                    parts = key_text.split('/', Qt::SkipEmptyParts);
+                }
                 if (parts.isEmpty())
                     continue;
                 QTreeWidgetItem *parent = root;
@@ -1484,14 +1499,15 @@ void MainWindow::openDroppedFormulaFile(const QString& path)
         QMessageBox::critical(this, "Load Formula module", error_message);
         return;
     }
-    auto *root = new QTreeWidgetItem(signal_tree);
+    auto *const root = new QTreeWidgetItem(signal_tree);
     root->setText(0, path);
     QJSValueIterator it(value);
     while (it.next())
     {
         QString name = it.name();
-        auto *item = new QTreeWidgetItem(root);
+        auto *const item = new QTreeWidgetItem(root);
         item->setText(0, name);
+        item->setFlags(item->flags() | Qt::ItemNeverHasChildren);
         const QString signal_name = path + '|' + name;
         formula_signals.insert(signal_name, value);
         item->setData(0, Qt::UserRole, signal_name);
