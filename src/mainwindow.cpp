@@ -196,7 +196,7 @@ void MainWindow::setupUI()
     plot->setInteraction(QCP::iRangeDrag, true);
     plot->setInteraction(QCP::iRangeZoom, true);
     plot->xAxis->setLabel("raw_idx");
-    plot->yAxis->setLabel("Values");
+    plot->yAxis->setTickLabels(false);
     panel_rects.append(plot->axisRect());
     panel_legends.append(plot->legend);
     active_panel = plot->axisRect();
@@ -1735,8 +1735,6 @@ void MainWindow::setupPanels()
         else
             x_axis->setTicker(QSharedPointer<QCPAxisTicker>::create());
         QCPAxis *y_axis = rect->axis(QCPAxis::atLeft);
-        if (const auto &assoc = signal_meas_unit.find(signal_column_names[i]); assoc != signal_meas_unit.end())
-            y_axis->setLabel(assoc.value());
         y_axis->setScaleType(settings.logarithmic ? QCPAxis::stLogarithmic : QCPAxis::stLinear);
         if (settings.logarithmic)
             y_axis->setTicker(QSharedPointer<QCPAxisTickerLog>::create());
@@ -1778,12 +1776,33 @@ void MainWindow::fitPanelRanges()
     }
     for (int i = 0; i < panel_rects.size(); ++i)
     {
-        QCPAxis *axis = panel_rects[i]->axis(QCPAxis::atLeft);
+        for (QCPAxis *axis : panel_rects[i]->axes())
+        {
+            for (QCPGraph *graph : panel_rects[i]->graphs())
+                if (graph->valueAxis() == axis)
+                    axis = nullptr;
+            if (axis && axis->axisType() == QCPAxis::atLeft)
+            {
+                if (panel_rects[i]->axisCount(QCPAxis::atLeft) > 1)
+                {
+                    panel_rects[i]->removeAxis(axis);
+                }
+                else
+                {
+                    axis->setLabel(QString());
+                    axis->setTickLabels(false);
+                }
+            }
+        }
         const PlotPanelSettings &settings = panel_settings[i];
-        if (settings.automatic_range)
-            axis->rescale();
-        else
-            axis->setRange(settings.minimum, settings.maximum);
+        for (int j = 0, n = panel_rects[i]->axisCount(QCPAxis::atLeft); j < n; ++j)
+        {
+            QCPAxis *axis = panel_rects[i]->axis(QCPAxis::atLeft, j);
+            if (settings.automatic_range)
+                axis->rescale();
+            else
+                axis->setRange(settings.minimum, settings.maximum);
+        }
     }
 }
 
@@ -1814,8 +1833,30 @@ void MainWindow::setupPlot(const std::shared_ptr<ParquetData> &data, bool preser
         y.reserve(signal.size());
         for (double value : signal)
             y.append(value * settings.multiplier + settings.offset);
-        QCPGraph *graph = plot->addGraph(panel_rects[panel]->axis(QCPAxis::atBottom),
-                                        panel_rects[panel]->axis(QCPAxis::atLeft));
+
+        QCPAxis *y_axis = panel_rects[panel]->axis(QCPAxis::atLeft);
+        if (const auto &assoc = signal_meas_unit.find(signal_column_names[i]); assoc != signal_meas_unit.end())
+        {
+            if (i > 0)
+            {
+                y_axis = nullptr;
+                for (int j = 0, n = panel_rects[panel]->axisCount(QCPAxis::atLeft); j < n; ++j)
+                {
+                    QCPAxis* axis = panel_rects[panel]->axis(QCPAxis::atLeft, j);
+                    if (axis->label() == assoc.value())
+                    {
+                        y_axis = axis;
+                        break;
+                    }
+                }
+            }
+            if (y_axis == nullptr)
+                y_axis = panel_rects[panel]->addAxis(QCPAxis::atLeft);
+            y_axis->setLabel(assoc.value());
+        }
+        y_axis->setTickLabels(true);
+
+        QCPGraph *graph = plot->addGraph(panel_rects[panel]->axis(QCPAxis::atBottom), y_axis);
         graph->setData(x, y);
         graph->setName(signal_column_names.value(i, QString("Signal %1").arg(i + 1)));
         graph->setLineStyle(settings.style == 2 ? QCPGraph::lsNone :
