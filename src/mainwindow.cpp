@@ -147,8 +147,7 @@ QString isoFromMicroseconds(double value)
         micros -= 1000000;
     }
     const QDateTime time = QDateTime::fromSecsSinceEpoch(seconds, QTimeZone::UTC);
-    return time.toString("yyyy-MM-ddTHH:mm:ss") +
-           QString(".%1Z").arg(micros, 6, 10, QChar('0'));
+    return time.toString("yyyy-MM-ddTHH:mm:ss.%1Z").arg(micros, 6, 10, QChar('0'));
 }
 
 class IsoMicrosecondTicker : public QCPAxisTicker
@@ -1505,29 +1504,48 @@ void MainWindow::openDroppedFormulaFile(const QString& path)
     while (it.next())
     {
         QString name = it.name();
-        auto *const item = new QTreeWidgetItem(root);
-        item->setText(0, name);
-        item->setFlags(item->flags() | Qt::ItemNeverHasChildren);
+        value = it.value();
         const QString signal_name = path + '|' + name;
         formula_signals.insert(signal_name, value);
-        item->setData(0, Qt::UserRole, signal_name);
-        item->setToolTip(0, signal_name);
+        if (value.isArray() || value.isNumber() || value.isCallable())
+        {
+            auto *const item = new QTreeWidgetItem(root);
+            item->setData(0, Qt::UserRole, signal_name);
+            item->setToolTip(0, signal_name);
+            item->setText(0, name);
+            item->setFlags(item->flags() | Qt::ItemNeverHasChildren);
+        }
     }
 }
 
 std::vector<double> MainWindow::evaluateFormulaSignal(const QString &name, size_t row_count)
 {
     std::vector<double> values(row_count, std::numeric_limits<double>::quiet_NaN());
-    const QString export_name = name.section('|', -1);
-    QJSValue result = formula_signals.value(name).property(export_name);
+    QJSValue result = formula_signals.value(name);
     if (result.isCallable())
         result = result.call();
     if (result.isError())
     {
         throw std::runtime_error(QString("Error evaluating %1:\n%2\nLine: %3")
-                                     .arg(export_name, result.property("message").toString())
+                                     .arg(name, result.property("message").toString())
                                      .arg(result.property("lineNumber").toInt())
                                      .toStdString());
+    }
+    const QString unit_name = name.section('|', 0, 0) + "|unit";
+    if (formula_signals.contains(unit_name))
+    {
+        QJSValue object = formula_signals.value(unit_name);
+        QJSValue unit = object.property(name.section('|', -1));
+        if (unit.isCallable())
+            unit = unit.callWithInstance(object);
+        if (unit.isError())
+        {
+            throw std::runtime_error(QString("Error evaluating %1:\n%2\nLine: %3")
+                                         .arg(unit_name, unit.property("message").toString())
+                                         .arg(unit.property("lineNumber").toInt())
+                                         .toStdString());
+        }
+        signal_meas_unit[name] = unit.toString();
     }
     if (result.isArray())
     {
@@ -1541,7 +1559,7 @@ std::vector<double> MainWindow::evaluateFormulaSignal(const QString &name, size_
     }
     else
     {
-        throw std::runtime_error(QString("%1 does not yield an array or a number").arg(export_name).toStdString());
+        throw std::runtime_error(QString("%1 does not yield an array or a number").arg(name).toStdString());
     }
     return values;
 }
@@ -2283,7 +2301,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             const QString name = item ? item->data(0, Qt::UserRole).toString() : QString();
             QJSValue variable;
             if (formula_signals.contains(name))
-                variable = formula_signals.value(name).property(name.section('|', -1));
+                variable = formula_signals.value(name);
             if (event->type() == QEvent::DragEnter || (variable.isArray() && !variable.isCallable()))
                 drop->acceptProposedAction();
             else
@@ -2303,6 +2321,12 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
                         const QString &signal_name = signal_column_names[signal_index];
                         item->setText(0, QString("%1 = %2").arg(name.section('|', -1), signal_name.section('|', -1)));
                         item->setToolTip(0, QString("%1 = %2").arg(name, signal_name));
+                        const QString &unit_name = name.section('|', 0, 0) + "|unit";
+                        if (formula_signals.contains(unit_name) && signal_meas_unit.contains(signal_name))
+                        {
+                            variable = formula_signals.value(unit_name);
+                            variable.setProperty(name.section('|', -1), signal_meas_unit[signal_name]);
+                        }
                     }
                 }
             }

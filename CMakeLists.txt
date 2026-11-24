@@ -108,7 +108,8 @@ endif()
 add_executable(${PROJECT_NAME} WIN32
     src/main.cpp
     src/mainwindow.cpp
-    src/mainwindow.h)
+    src/mainwindow.h
+    resources/resources.rc)
 
 qt_add_resources(${PROJECT_NAME} "resources" FILES "resources/io.github.selimct.ParquetPlot.svg")
 

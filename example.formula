@@ -1,6 +1,13 @@
 export var a = [1, 2, 3, 5, 8, 13];
 export var b = [1, 2, 4, 8, 16, 32];
 
+export var unit =
+{
+    a: "a",
+    b: "b",
+    difference: function() { return this.b + " - " + this.a; }
+};
+
 export function difference()
 {
     var n = Math.min(a.length, b.length);
